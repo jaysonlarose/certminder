@@ -21,7 +21,7 @@ import cryptography.hazmat.primitives.serialization
 import cryptography.hazmat.primitives.serialization.pkcs7
 import cryptography.hazmat.primitives.serialization.pkcs12
 
-__version__ = "0.1"
+__version__ = "0.2"
 
 def splitlen_array_remainder(data, length):# {{{
 	
@@ -520,10 +520,10 @@ def render_certificate(cert):# {{{
 	then calls the `openssl` binary to parse it into something informative.
 	"""
 	import subprocess
-	cert_text = certificate_to_pem(cert).decode()
+	cert_text = certificate_to_pem(cert)
 	procargs = ['openssl', 'x509', '-in', '-', '-text', '-noout']
 	proc = subprocess.Popen(procargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
-	out, err = proc.communicate(cert_text.encode())
+	out, err = proc.communicate(cert_text)
 	return out.decode()
 # }}}
 def parse_cisco_derhex_line(bytedata):# {{{
@@ -580,6 +580,67 @@ def get_certificates_from_derhex(bytedata):# {{{
 	
 	return ret
 # }}}
+
+def get_cryptothing(obj):
+	if isinstance(obj, cryptography.x509.Certificate):
+		return CertificateCryptoThing(obj)
+	elif isinstance(obj, cryptography.hazmat.primitives.asymmetric.rsa.RSAPrivateKey):
+		return RSAPrivateCryptoThing(obj)
+	elif isinstance(obj, cryptography.hazmat.backends.openssl.x509._CertificateSigningRequest):
+		return CSRCryptoThing(obj)
+	else:
+		return UnknownCryptoThing(obj)
+
+class CryptoThing:
+	def __init__(self, obj):
+		self.obj = obj
+
+class UnknownCryptoThing(CryptoThing):
+	type = "Unknown"
+	color = "#888"
+	@property
+	def description(self):
+		return str(type(self.obj))
+	def render(self):
+		return "I don't know how to display this!"
+
+class CertificateCryptoThing(CryptoThing):
+	type = "Certificate"
+	color = "#aaf"
+	@property
+	def description(self):
+		return self.obj.subject.rfc4514_string()
+	def render(self):
+		return render_certificate(self.obj)
+
+class RSAPrivateCryptoThing(CryptoThing):
+	type = "RSA Private Key"
+	color = "#ff0"
+	@property
+	def description(self):
+		return f"{self.obj.key_size} bit"
+	def render(self):
+		import subprocess
+		pem_text = self.obj.private_bytes(encoding=cryptography.hazmat.primitives.serialization.Encoding.PEM, format=cryptography.hazmat.primitives.serialization.PrivateFormat.PKCS8, encryption_algorithm=cryptography.hazmat.primitives.serialization.NoEncryption())
+		procargs = ['openssl', 'rsa', '-in', '-', '-text', '-noout']
+		proc = subprocess.Popen(procargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
+		out, err = proc.communicate(pem_text)
+		return out.decode()
+
+class CSRCryptoThing(CryptoThing):
+	type = "Certificate Signing Request"
+	color = "#aa0"
+	@property
+	def description(self):
+		return self.obj.subject.rfc4514_string()
+	def render(self):
+		import subprocess
+		pem_text = self.obj.public_bytes(encoding=cryptography.hazmat.primitives.serialization.Encoding.PEM)
+		procargs = ['openssl', 'req', '-in', '-', '-text', '-noout']
+		proc = subprocess.Popen(procargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
+		out, err = proc.communicate(pem_text)
+		return out.decode()
+
 
 # Everything above here is library stuff.
 # This is where the primary logic resides.
@@ -729,6 +790,7 @@ class cli_catcert:# {{{
 				sys.exit(1)
 			certs = try_everything(open(c, "rb").read())
 		certsonly = [ x for x in certs if isinstance(x, cryptography.x509.Certificate) ]
+		otheritems = [ x for x in certs if not isinstance(x, cryptography.x509.Certificate) ]
 		print(f"Found {len(certsonly):n} cert(s):")
 		if args.verify:
 			ca_store = {}
@@ -805,11 +867,16 @@ class cli_catcert:# {{{
 					print(colorize("#0f0", "      Verification OK"))
 				else:
 					print(colorize("#f00", "      Verification FAILED"))
+		if len(otheritems) > 0:
+			print(f"Found {len(otheritems):n} other item(s):")
+			for item in otheritems:
+				thing = get_cryptothing(item)
+				print("  *  {} ({})".format(thing.type, thing.description))
 		if args.dump_cert:
-			for cert in certsonly:
-				print("Detail for {}".format(cert.subject.rfc4514_string()))
-				print(colorize("#aaf", render_certificate(cert)))
-				#print(render_certificate(cert))
+			for item in certs:
+				thing = get_cryptothing(item)
+				print("Detail for {} ({})".format(thing.type, thing.description))
+				print(colorize(thing.color, thing.render()))
 # }}}
 
 def build_argparser():# {{{
