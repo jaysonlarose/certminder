@@ -21,7 +21,7 @@ import cryptography.hazmat.primitives.serialization
 import cryptography.hazmat.primitives.serialization.pkcs7
 import cryptography.hazmat.primitives.serialization.pkcs12
 
-__version__ = "0.2"
+__version__ = "0.3"
 
 def splitlen_array_remainder(data, length):# {{{
 	
@@ -132,7 +132,7 @@ def lstripn(text, count, chars=None):# {{{
 			break
 	return text
 # }}}
-def colorize(hexcolor, text):# {{{
+def colorize(hexcolor, text, force=False):# {{{
 	"""
 	Very basic function for colorizing output.
 
@@ -145,7 +145,10 @@ def colorize(hexcolor, text):# {{{
 	elif len(hexcolor) == 6:
 		rgb = [ int(x, 16) for x in splitlen_array_remainder(hexcolor, 2) ]
 	rgbstr = ';'.join([ str(x) for x in rgb ])
-	return f"\x1b[38;2;{rgbstr}m{text}\x1b[39m"
+	if sys.stdout.isatty() or force:
+		return f"\x1b[38;2;{rgbstr}m{text}\x1b[39m"
+	else:
+		return text
 # }}}
 
 
@@ -776,6 +779,7 @@ class cli_catcert:# {{{
 		parser.add_argument("-f", "--add-file", action="append", dest="cert_files", help="Add file to CA registry")
 		parser.add_argument("-d", "--add-dir", action="append", dest="cert_dirs", help="Add directory to CA registry")
 		parser.add_argument("-q", "--quiet", action="store_false", dest="dump_cert", default=True, help="Omit certificate dump")
+		parser.add_argument("--force-color", action="store_true", dest="force_color", default=False, help="Force color output even if STDOUT is not a TTY")
 	@classmethod
 	def run(cls, args):
 		c = args.file_or_host
@@ -808,15 +812,15 @@ class cli_catcert:# {{{
 			try:
 				verify_cert_freshness(cert, nao)
 				end = cert.not_valid_after.replace(tzinfo=pytz.reference.UTC)
-				expiry_text = colorize("#888", "Expires in {}".format(timedelta_to_DHMS(end - nao)))
+				expiry_text = colorize("#888", "Expires in {}".format(timedelta_to_DHMS(end - nao)), force=args.force_color)
 			except PrematureBirthError:
 				valid = False
 				reasons.append("Not yet valid")
-				expiry_text = colorize("#f00", "Premature birth")
+				expiry_text = colorize("#f00", "Premature birth", force=args.force_color)
 			except ExpiredError:
 				valid = False
 				reasons.append("Certificate expired")
-				expiry_text = colorize("#f00", "Expired!")
+				expiry_text = colorize("#f00", "Expired!", force=args.force_color)
 			print("  * {} ({})".format(cert.subject.rfc4514_string(), expiry_text))
 			if args.verify:
 				vcert = cert
@@ -864,9 +868,9 @@ class cli_catcert:# {{{
 							info.append("signature invalid")
 					print("      {} - {}".format(subject, ", ".join(info)))
 				if auth and not expiry:
-					print(colorize("#0f0", "      Verification OK"))
+					print(colorize("#0f0", "      Verification OK", force=args.force_color))
 				else:
-					print(colorize("#f00", "      Verification FAILED"))
+					print(colorize("#f00", "      Verification FAILED", force=args.force_color))
 		if len(otheritems) > 0:
 			print(f"Found {len(otheritems):n} other item(s):")
 			for item in otheritems:
@@ -876,7 +880,7 @@ class cli_catcert:# {{{
 			for item in certs:
 				thing = get_cryptothing(item)
 				print("Detail for {} ({})".format(thing.type, thing.description))
-				print(colorize(thing.color, thing.render()))
+				print(colorize(thing.color, thing.render(), force=args.force_color))
 # }}}
 
 def build_argparser():# {{{
