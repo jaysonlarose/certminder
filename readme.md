@@ -12,6 +12,16 @@ Sometimes acme.sh, certbot, or whatever other of your best-laid plans don't cut 
 
 Just like with catcert, any format you want, even on a remote server.
 
+# Installation
+
+I haven't gotten this added to [PyPI](https://pypi.org/) yet — mainly because I'm kind of lazy — but that doesn't mean you have to bother with manual installation. Just run this from the command-line:
+
+```bash
+sudo pip3 install git+https://github.com/jaysonlarose/certminder
+```
+
+, and you're off to the races!
+
 # Philosophy
 
 * Minimal dependencies
@@ -26,7 +36,7 @@ Just like with catcert, any format you want, even on a remote server.
 * PKCS#12 (.p12, .pfx)
 * Cisco X.509 DER hex dump (ie, `show running-config` on a Cisco ASA)
 
-# cerminder config file format
+# certminder config file format
 
 Configuration files are in ConfigParser format. Each section describes a certificate to inspect, its action threshold, and what command to run if it fails the freshness test.
 
