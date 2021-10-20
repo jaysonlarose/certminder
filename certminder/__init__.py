@@ -13,7 +13,6 @@ Binary Dependencies:
 
 """
 
-
 import argparse, collections, datetime, locale, os, pytz.reference, sys
 import cryptography.x509
 import cryptography.hazmat.backends
@@ -21,8 +20,39 @@ import cryptography.hazmat.primitives.serialization
 import cryptography.hazmat.primitives.serialization.pkcs7
 import cryptography.hazmat.primitives.serialization.pkcs12
 
-__version__ = "0.3"
+__version__ = "0.4"
 
+whitespace_unicode = [
+	"0020", # SPACE
+	"00a0", # NO-BREAK SPACE
+	"1680", # OGHAM SPACE MARK
+	"180e", # MONGOLIAN VOWEL SEPARATOR
+	"2000", # EN QUAD
+	"2001", # EM QUAD
+	"2002", # EN SPACE
+	"2003", # EM SPACE
+	"2004", # THREE-PER-EM SPACE
+	"2005", # FOUR-PER-EM SPACE
+	"2006", # SIX-PER-EM SPACE
+	"2007", # FIGURE SPACE
+	"2008", # PUNCTUATION SPACE
+	"2009", # THIN SPACE
+	"2060", # WORD JOINER
+	"200a", # HAIR SPACE
+	"200b", # ZERO WIDTH SPACE
+	"202f", # NARROW NO-BREAK SPACE
+	"205f", # MEDIUM MATHEMATICAL SPACE
+	"3000", # IDEOGRAPHIC SPACE
+	"feff", # ZERO WIDTH NO-BREAK SPACE
+	"0008", # BACKSPACE
+	"0009", # TAB
+	"000a", # LINE FEED
+	"000b", # VERTICAL TAB
+	"000c", # FORM FEED
+	"000d", # CARRIAGE RETURN
+	"007f", # DELETE
+]
+whitespace = ''.join([ chr(int(x, 16)) for x in whitespace_unicode ])
 def splitlen_array_remainder(data, length):# {{{
 	
 	import math
@@ -122,7 +152,7 @@ def lstripn(text, count, chars=None):# {{{
 	"""
 	if chars is None:
 		import string
-		chars = string.whitespace
+		chars = whitespace
 	for i in range(count):
 		if len(text) == 0:
 			break
@@ -165,7 +195,7 @@ def parse_pemheader(bytedata):# {{{
 	If it doesn't look like the start or end of a PEM block, returns
 	None.
 	"""
-	sdata = bytedata.rstrip(b"\n\r")
+	sdata = bytedata.strip(whitespace.encode())
 	if sdata.startswith(b"-----BEGIN ") and sdata.endswith(b"-----"):
 		return ("BEGIN", sdata[len(b"-----BEGIN "):-len(b"-----")].decode())
 	elif sdata.startswith(b"-----END ") and sdata.endswith(b"-----"):
@@ -186,25 +216,26 @@ def extract_pemblocks(bytedata):# {{{
 	"""
 	ret = []
 	processing = None
-	buf = None
+	buf = []
 	lines = bytedata.splitlines(keepends=True)
 	for line in lines:
 		if processing is None:
 			parsed = parse_pemheader(line)
 			if parsed is not None and parsed[0] == 'BEGIN':
 				processing = parsed[1]
-				buf = line
+				buf = [line.strip(whitespace.encode())]
 			# Falling out into the ignore hole
 		else:
 			# We're processing, this data gets stuck in the buffer.
-			buf += line
+			buf.append(line.strip(whitespace.encode()))
 			parsed = parse_pemheader(line)
 			if parsed is not None and parsed[0] == 'END':
 				if parsed[1] == processing:
 					# Additionally, if this is an end block and it lines up with
 					# what we're processing, finish processing and add the buffer
 					# to ret.
-					ret.append(buf)
+					ret.append(b"\n".join(buf) + b"\n")
+					buf = []
 					processing = None
 	# Unfinished blocks? Don't care about 'em. Garbage in, garbage out.
 	return ret
@@ -788,6 +819,8 @@ class cli_catcert:# {{{
 			host = frags[0]
 			port = int(frags[1])
 			certs = get_certificate_chain_from_tls(host, port, extradata=False)
+		elif c == '-':
+			certs = try_everything(sys.stdin.read().encode())
 		else:
 			if not os.path.exists(c):
 				print(f"{c} does not exist!", file=sys.stderr)
