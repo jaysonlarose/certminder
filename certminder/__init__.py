@@ -20,7 +20,7 @@ import cryptography.hazmat.primitives.serialization
 import cryptography.hazmat.primitives.serialization.pkcs7
 import cryptography.hazmat.primitives.serialization.pkcs12
 
-__version__ = "0.4"
+__version__ = "0.5"
 
 whitespace_unicode = [
 	"0020", # SPACE
@@ -53,6 +53,7 @@ whitespace_unicode = [
 	"007f", # DELETE
 ]
 whitespace = ''.join([ chr(int(x, 16)) for x in whitespace_unicode ])
+
 def splitlen_array_remainder(data, length):# {{{
 	
 	import math
@@ -182,6 +183,9 @@ def colorize(hexcolor, text, force=False):# {{{
 # }}}
 
 
+class PasswordRequiredError(TypeError):# {{{
+	pass
+# }}}
 def parse_pemheader(bytedata):# {{{
 	"""
 	Looks through a bytes() blob, which is intented to be a single line
@@ -269,13 +273,15 @@ def parse_pemblock(bytedata, password=None, extradata=False):# {{{
 	elif blocktype == 'PRIVATE KEY':
 		try:
 			parsed = cryptography.hazmat.primitives.serialization.load_pem_private_key(bytedata, password=password)
-		except TypeError:
-			pass
+		except TypeError as e:
+			if e.args[0] == 'Password was not given but private key is encrypted':
+				raise PasswordRequiredError(*e.args)
 	elif blocktype == 'RSA PRIVATE KEY':
 		try:
 			parsed = cryptography.hazmat.primitives.serialization.load_pem_private_key(bytedata, password=password)
-		except TypeError:
-			pass
+		except TypeError as e:
+			if e.args[0] == 'Password was not given but private key is encrypted':
+				raise PasswordRequiredError(*e.args)
 	elif blocktype == 'CERTIFICATE REQUEST':
 		parsed = cryptography.x509.load_pem_x509_csr(bytedata)
 
@@ -426,7 +432,7 @@ def try_everything(bytedata, password=None):# {{{
 		pass
 	# Try loading PKCS#12
 	try:
-		certs = get_certificates_from_pkcs12(bytedata)
+		certs = get_certificates_from_pkcs12(bytedata, password=password)
 		#print("pkcs12")
 		return certs
 	except ValueError:
@@ -436,7 +442,7 @@ def try_everything(bytedata, password=None):# {{{
 	if len(certs) > 0:
 		return certs
 	# Try PEM stuff.
-	certs = get_certificates_from_pem(bytedata)
+	certs = get_certificates_from_pem(bytedata, password=password)
 	return certs
 # }}}
 class TemporalError(Exception):# {{{
@@ -825,7 +831,24 @@ class cli_catcert:# {{{
 			if not os.path.exists(c):
 				print(f"{c} does not exist!", file=sys.stderr)
 				sys.exit(1)
-			certs = try_everything(open(c, "rb").read())
+			try:
+				certs = try_everything(open(c, "rb").read())
+			except PasswordRequiredError:
+				failed = True
+				if sys.stdin.isatty():
+					import getpass
+					password = getpass.getpass("Private key password: ")
+					try:
+						certs = try_everything(open(c, "rb").read(), password=password.encode())
+						failed = False
+					except ValueError:
+						print("Bad password!", file=sys.stderr)
+						sys.exit(1)
+					except PasswordRequiredError:
+						pass
+				if failed:
+					print(f"Password required for private key!", file=sys.stderr)
+					sys.exit(1)
 		certsonly = [ x for x in certs if isinstance(x, cryptography.x509.Certificate) ]
 		otheritems = [ x for x in certs if not isinstance(x, cryptography.x509.Certificate) ]
 		print(f"Found {len(certsonly):n} cert(s):")
