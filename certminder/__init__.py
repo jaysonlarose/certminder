@@ -20,7 +20,7 @@ import cryptography.hazmat.primitives.serialization
 import cryptography.hazmat.primitives.serialization.pkcs7
 import cryptography.hazmat.primitives.serialization.pkcs12
 
-__version__ = "0.5"
+__version__ = "0.6"
 
 whitespace_unicode = [
 	"0020", # SPACE
@@ -284,6 +284,8 @@ def parse_pemblock(bytedata, password=None, extradata=False):# {{{
 				raise PasswordRequiredError(*e.args)
 	elif blocktype == 'CERTIFICATE REQUEST':
 		parsed = cryptography.x509.load_pem_x509_csr(bytedata)
+	elif blocktype in ['PUBLIC KEY', 'RSA PUBLIC KEY']:
+		parsed = cryptography.hazmat.primitives.serialization.load_pem_public_key(bytedata)
 
 
 	return (blocktype, parsed)
@@ -628,12 +630,16 @@ def get_cryptothing(obj):
 		return RSAPrivateCryptoThing(obj)
 	elif isinstance(obj, cryptography.hazmat.backends.openssl.x509._CertificateSigningRequest):
 		return CSRCryptoThing(obj)
+	elif isinstance(obj, cryptography.hazmat.backends.openssl.rsa._RSAPublicKey):
+		return RSAPublicCryptoThing(obj)
 	else:
 		return UnknownCryptoThing(obj)
 
 class CryptoThing:
 	def __init__(self, obj):
 		self.obj = obj
+	def indent(self, size=4):
+		return("\n".join([ (" " * size) + x for x in self.render().splitlines() ]) + "\n")
 
 class UnknownCryptoThing(CryptoThing):
 	type = "Unknown"
@@ -666,6 +672,21 @@ class RSAPrivateCryptoThing(CryptoThing):
 		proc = subprocess.Popen(procargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
 		out, err = proc.communicate(pem_text)
 		return out.decode()
+
+class RSAPublicCryptoThing(CryptoThing):
+	type = "RSA Public Key"
+	color = "#f0f"
+	@property
+	def description(self):
+		return f"{self.obj.key_size} bit"
+	def render(self):
+		import subprocess
+		pem_text = self.obj.public_bytes(encoding=cryptography.hazmat.primitives.serialization.Encoding.PEM, format=cryptography.hazmat.primitives.serialization.PublicFormat.SubjectPublicKeyInfo)
+		procargs = ['openssl', 'rsa', '-in', '-', '-text', '-noout', '-pubin']
+		proc = subprocess.Popen(procargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
+		out, err = proc.communicate(pem_text)
+		return out.decode()
+
 
 class CSRCryptoThing(CryptoThing):
 	type = "Certificate Signing Request"
@@ -806,16 +827,20 @@ class cli_catcert:# {{{
 
 	--quiet omits the certificate details dump, which is useful when you're more interested in
 	    certificate validity than contents.
+
+	--extra will dump non-certificate items as well.
 	"""
 	@classmethod
 	def parser_setup(cls, parser):
-		parser.set_defaults(cert_files=[], cert_dirs=[])
+		parser.set_defaults(cert_files=[], cert_dirs=[], dump_mode="certs")
 		parser.add_argument("file_or_host")
 		parser.add_argument("-v", "--verify", action="store_true", dest="verify", default=False, help="Attempt to verify certificate chain of authority")
 		parser.add_argument("-n", "--no-system", action="store_false", dest="import_system_certs", default=True, help="When verifying, do not import system certificates")
 		parser.add_argument("-f", "--add-file", action="append", dest="cert_files", help="Add file to CA registry")
 		parser.add_argument("-d", "--add-dir", action="append", dest="cert_dirs", help="Add directory to CA registry")
-		parser.add_argument("-q", "--quiet", action="store_false", dest="dump_cert", default=True, help="Omit certificate dump")
+		group = parser.add_mutually_exclusive_group()
+		group.add_argument("-q", "--quiet", action="store_const", const="none", dest="dump_mode", help="Omit certificate dump")
+		group.add_argument("-x", "--extra", action="store_const", const="extra", dest="dump_mode", help="Dump non-certificate items as well")
 		parser.add_argument("--force-color", action="store_true", dest="force_color", default=False, help="Force color output even if STDOUT is not a TTY")
 	@classmethod
 	def run(cls, args):
@@ -932,11 +957,20 @@ class cli_catcert:# {{{
 			for item in otheritems:
 				thing = get_cryptothing(item)
 				print("  *  {} ({})".format(thing.type, thing.description))
-		if args.dump_cert:
-			for item in certs:
+
+		if args.dump_mode != "none":
+			print()
+
+		if args.dump_mode in ['certs', 'extra']:
+			for item in certsonly:
 				thing = get_cryptothing(item)
 				print("Detail for {} ({})".format(thing.type, thing.description))
-				print(colorize(thing.color, thing.render(), force=args.force_color))
+				print(colorize(thing.color, thing.indent(), force=args.force_color))
+		if len(otheritems) > 0 and args.dump_mode == 'extra':
+			for item in otheritems:
+				thing = get_cryptothing(item)
+				print("Detail for {} ({})".format(thing.type, thing.description))
+				print(colorize(thing.color, thing.indent(), force=args.force_color))
 # }}}
 
 def build_argparser():# {{{
