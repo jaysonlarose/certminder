@@ -407,6 +407,14 @@ def get_certificates_from_pkcs7(pkcs7_data, extradata=False):# {{{
 	else:
 		return certs
 # }}}
+
+# OpenSSH keys
+# cryptography.hazmat.primitives.serialization.ssh.load_ssh_public_key(bytes)
+# cryptography.hazmat.primitives.serialization.load_ssh_public_key(open(bytes))
+# pubkey_obj.public_bytes(encoding=cryptography.hazmat.primitives.serialization.Encoding.OpenSSH, format=cryptography.hazmat.primitives.serialization.PublicFormat.OpenSSH)
+# pubkey_obj.__class__.__module__.split('.')[-1]
+
+# cryptography.hazmat.primitives.serialization.load_ssh_public_key(open(bytes))
 def try_everything(bytedata, password=None):# {{{
 	"""
 	Makes best effort go get stuff out of things.
@@ -707,45 +715,70 @@ class CSRCryptoThing(CryptoThing):
 # This is where the primary logic resides.
 class cli_certminder:# {{{
 	"""
-	Reads a configuration file that describes a list of certificates to check for
-	freshness, as well as commands to run if the certificates exceed a staleness
-	threshold.
-
-	Configuration files are in ConfigParser format. Each section describes a
-	certificate to inspect, its action threshold, and what command to run if it
-	fails the freshness test.
-
+	Reads a YAML configuration file that describes a list of certificates to
+	check for freshness.
+	
 	Example:
 
-	[my local certificate]
-	certificate = /etc/pki/mycert.pem
-	threshold   = 2w
-	run         = /usr/bin/notify-send "certificate {path} is expiring!"
-
-	[my remote certificate]
-	certificate = google.com:443
-	threshold   = 90d
-	run         = /usr/bin/notify-send "certificate {path} is expiring!"
-
-
-
-	Directives:
-
-	certificate: path to the certificate file to test. Use hostname:port to check
-	    a TLS certificate over the network.
+	- include: /etc/certminder.d
+	- certificate: /etc/ssl/certs/mycert.pem
+	  compare:     myhostname.com:443
+	  privkey:     /etc/ssl/private/mycert.key
+	  threshold: 2w
+	  fetchcmds:
+	    - salt-call tls.renew
+	  reloadcmds:
+	    - systemctl restart nginx
+	- certificate: /etc/ssl/certs/myothercert.pem
+	  threshold: 2w
+	  fetchcmds: salt-call tls.renew
+	  reloadcmds: systemctl restart dovecot
+	  
+	Top-level directives:
 	
-	threshold:   activity will be triggered if the certificate is set to expire
-	    anytime before this threshold. Specified in a format like: 12w 10d 4h 2m 1s
-		translating to "10 weeks, 10 days, 4 hours, 2 minutes, 1 second".
+	include: 
+		Specifies one (or more) directories to check for additional configuration files.
+		Todo: allow specifying a glob in addition to a directory name
+		Todo: add "recursive" modifier?
+		Note: `include` directives will only be honored for a directly-specified
+		  configuration file. `include` directives in included configurations will be ignored.
 
-	run:         this command will be run if activity is triggered. Standard python
-	    string formatting is used for replacement. Currently the only tokens used
-		for replacement are:
+	certificate:
+		Specifies the path to a certificate file to check.
+		If the certificate is expired, or is less than the `threshold` duration away from
+		  expiration, the commands in the `fetchcmds` modifier will be run. If they succeed,
+		  then the commands in the `reloadcmds` modifier will be run.
+		Modifiers:
 
-		path - the path or hostname:port to the certificate being tested
+		compare: the certificate found at this path (or this host:port combination) will
+		  be compared against this certificate. If there's a mismatch, commands in the
+		  `reloadcmds` modifier will be run.
+		privkey: the private key found at this path will be checked to see if it works for
+		  this certificate. If it doesn't, `fetchcmds` will be run, followed by `reloadcmds`
+		  NOT YET IMPLEMENTED.
+		threshold: if the certificate is set to expire any time before this threshold,
+		  `fetchcmds` will be run, followed by `reloadcmds`. Specified in a format like:
+		  `12w 10d 4h 2m 1s` translating to "12 weeks, 10 days, 4 hours, 2 minutes, 1 second".
+		fetchcmds: command (or list of commands) to run to refresh the certificate.
+		  If this command succeeds, the commands in the `reloadcmds` directive are usually
+		  run afterwards.
+		  If a list of commands is specified, they will be executed in order, as long as the
+		  last run command has an exit status of 0.  Any non-zero exit code will be considered
+		  failure, and further commands will not be run.
+		reloadcmds: command (or list of commands) to run to reload service(s) dependent on this
+		  certificate. Unlike `fetchcmds`, all commands in this list will be run, regardless of
+		  exit status of the command before it.
+	
+	About running commands:
+	
+	Standard python string formatting is used for replacement. Currently the only
+	tokens used for replacement are:
+
+	    path - the path to the certificate being tested
 		subject - the RFC4514 subject name for the certificate. This can be
 		    used to differentiate between certificates if a path or network
 			location contains a certificate chain.
+
 	"""
 	@classmethod
 	def parser_setup(cls, parser):
@@ -755,41 +788,77 @@ class cli_certminder:# {{{
 	@classmethod
 	def run(cls, args):
 		config_fn = args.config_file
-		import configparser, shlex
-		conf = configparser.ConfigParser()
+		import yaml, shlex, subprocess
 		if not args.quiet:
 			print(f"Reading {config_fn}")
-		conf.read(config_fn)
 
-		nao = datetime.datetime.utcnow().replace(tzinfo=pytz.reference.UTC)
-		for section in conf.sections():
-			certpath = conf[section]['certificate']
-			if not args.quiet:
-				print(f"Inspecting {certpath}")
-			frags = certpath.split(":", 1)
-			if len(frags) > 1:
-				host = frags[0]
-				port = int(frags[1])
-				certs = get_certificate_chain_from_tls(host, port, extradata=False)
+		# Read in the yaml specified on the commmand-line, separate it into
+		# a list of include directives and certificate directives.
+		conf = yaml.load(open(config_fn, "r").read(), Loader=yaml.Loader)
+		include_directives = [ x for x in conf if 'include' in x ]
+		cert_directives    = [ x for x in conf if 'certificate' in x ]
+
+
+		# Parse `include` directives into a list.
+		includes = []
+		if len(include_directives) > 0:
+			for directive in include_directives:
+				if isinstance(directive['include'], str):
+					includes.append(directive['include'])
+				elif isinstance(directive['include'], list):
+					includes.extend(directive['include'])
+
+		# Resolve the list of includes into a list of individual files
+		# to be included. (If an include points to a directory, treat
+		# that as if it means "all files inside this directory")
+		include_files = []
+		for include_dir in includes:
+			if os.path.isfile(include_dir):
+				include_files.append(include_dir)
 			else:
-				if not os.path.exists(certpath):
-					print(f"Certificate in section {section} ({certpath}) does not exist!")
-					sys.exit(1)
-				certs = try_everything(open(certpath, "rb").read())
+				for fn in os.listdir(include_dir):
+					path = os.path.join(include_dir, fn)
+					if not os.path.isfile(path):
+						continue
+					include_files.append(path)
+
+		# Load each included file and add its `certificate` directives to the
+		# cert_directives list.
+		for path in include_files:
+			conf = yaml.load(open(path, "r").read(), Loader=yaml.Loader)
+			cert_directives.extend([ x for x in conf if 'certificate' in x ])
+
+		# We're starting to work on certificates, get our baseline time for
+		# doing expiration checks.
+		nao = datetime.datetime.utcnow().replace(tzinfo=pytz.reference.UTC)
+
+		for cert_directive in cert_directives:
+			namespace = {}
+			perform_fetch = False
+			perform_reload = False
+			certpath = cert_directive['certificate']
+			namespace['certpath'] = certpath
+			if not os.path.exists(certpath):
+				print(f"Certificate {certpath} does not exist!", file=sys.stderr)
+				continue
+			certs = try_everything(open(certpath, "rb").read())
 			certsonly = [ x for x in certs if isinstance(x, cryptography.x509.Certificate) ]
 			if len(certsonly) < 1:
-				print(f"No certificates found for section {section} in {certpath}!")
-				sys.exit(1)
-			threshold = DHMS_to_timedelta(conf[section]['threshold'])
+				print(f"No certificates found in {certpath}!", file=sys.stderr)
+				continue
+			if 'threshold' in cert_directive:
+				threshold = DHMS_to_timedelta(cert_directive['threshold'])
 			threshold_exceeded = False
-			namespace = {}
-			namespace['path'] = certpath
-			for cert in certsonly:
+			for certno, cert in enumerate(certsonly):
+				if certno == 0:
+					namespace['subject'] = cert.subject.rfc4514_string()
 				if not args.quiet:
-					print(f"Checking certificate {cert.subject.rfc4514_string()}")
+					print(f"Checking {certpath} certificate {cert.subject.rfc4514_string()}")
 				try:
 					verify_cert_freshness(cert, nao)
 					end = cert.not_valid_after.replace(tzinfo=pytz.reference.UTC)
+					if not args.quiet:
+						print(f"  expires in {timedelta_to_DHMS(end - nao)}")
 					if end - nao < threshold:
 						threshold_exceeded = True
 				except PrematureBirthError:
@@ -797,17 +866,137 @@ class cli_certminder:# {{{
 				except ExpiredError:
 					threshold_exceeded = True
 
-				if threshold_exceeded:
-					namespace['subject'] = cert.subject.rfc4514_string()
-					break
+			class FallOut(Exception):
+				pass
+
+			if 'compare' in cert_directive:
+				if not args.quiet:
+					print(f"  `compare` directive found")
+				try:
+					frags = cert_directive['compare'].split(':', 1)
+					if len(frags) != 2:
+						print(f"Invalid `compare` modifier for {certpath}: {cert_directive['compare']}!", file=sys.stderr)
+						raise FallOut
+					try:
+						portno = int(frags[1])
+					except ValueError:
+						print(f"Invalid port number for `compare` modifier for {certpath}: {portno}!", file=sys.stderr)
+						raise FallOut
+					try:
+						comparecerts = get_certificate_chain_from_tls(frags[0], portno, extradata=False)
+					except subprocess.CalledProcessError:
+						print(f"Couldn't get TLS certificates for {certpath} from {cert_directive['compare']}!", file=sys.stderr)
+						raise FallOut
+					if comparecerts[0] != certsonly[0]:
+						if not args.quiet:
+							print(f"  compare FAILED against {cert_directive['compare']}, setting perform_reload")
+							perform_reload = True
+					elif not args.quiet:
+						print(f"  compare OK against {cert_directive['compare']}")
+				except FallOut:
+					print("  Fell out of compare!")
+					pass
+
 
 			if threshold_exceeded:
+				perform_fetch = True
+			if perform_fetch:
+				fetch_commands = []
 				if not args.quiet:
-					print("Threshold exceeded!")
-				procargs = [ x.format(**namespace) for x in shlex.split(conf[section]['run']) ]
+					print("  fetch desired")
+				if 'fetchcmds' in cert_directive:
+					if isinstance(cert_directive['fetchcmds'], str):
+						fetch_commands.append(cert_directive['fetchcmds'])
+					elif isinstance(cert_directive['fetchcmds'], list):
+						fetch_commands.extend(cert_directive['fetchcmds'])
+				for command in fetch_commands:
+					procargs = [ x.format(**namespace) for x in shlex.split(command) ]
+					if not args.quiet:
+						print(f"  running {procargs}")
+					proc = subprocess.run(procargs, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+					if proc.returncode != 0:
+						print(f"Process {procargs} returned error code {proc.returncode}!", file=sys.stderr)
+						print(f"Process stdout:", file=sys.stderr)
+						print(proc.stdout.decode(), file=sys.stderr)
+						print(f"Process stderr:", file=sys.stderr)
+						print(proc.stderr.decode(), file=sys.stderr)
+						print(f"(setting perform_reload to False)", file=sys.stderr)
+						perform_reload = False
+						break
+				perform_reload = True
+
+			if perform_reload:
+				reload_commands = []
 				if not args.quiet:
-					print(f"Running {procargs}")
-				subprocess.run(procargs, stdin=subprocess.DEVNULL)
+					print(f"  reload desired")
+				if 'reloadcmds' in cert_directive:
+					if isinstance(cert_directive['reloadcmds'], str):
+						reload_commands.append(cert_directive['reloadcmds'])
+					elif isinstance(cert_directive['reloadcmds'], list):
+						reload_commands.extend(cert_directive['reloadcmds'])
+				for command in reload_commands:
+					procargs = [ x.format(**namespace) for x in shlex.split(command) ]
+					if not args.quiet:
+						print(f"  running {procargs}")
+					proc = subprocess.run(procargs, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+					if proc.returncode != 0:
+						print(f"Process {procargs} returned error code {proc.returncode}!", file=sys.stderr)
+						print(f"Process stdout:", file=sys.stderr)
+						print(proc.stdout.decode(), file=sys.stderr)
+						print(f"Process stderr:", file=sys.stderr)
+						print(proc.stderr.decode(), file=sys.stderr)
+
+						
+
+
+		
+		#nao = datetime.datetime.utcnow().replace(tzinfo=pytz.reference.UTC)
+		#for section in conf.sections():
+		#	certpath = conf[section]['certificate']
+		#	if not args.quiet:
+		#		print(f"Inspecting {certpath}")
+		#	frags = certpath.split(":", 1)
+		#	if len(frags) > 1:
+		#		host = frags[0]
+		#		port = int(frags[1])
+		#		certs = get_certificate_chain_from_tls(host, port, extradata=False)
+		#	else:
+		#		if not os.path.exists(certpath):
+		#			print(f"Certificate in section {section} ({certpath}) does not exist!")
+		#			sys.exit(1)
+		#		certs = try_everything(open(certpath, "rb").read())
+		#	certsonly = [ x for x in certs if isinstance(x, cryptography.x509.Certificate) ]
+		#	if len(certsonly) < 1:
+		#		print(f"No certificates found for section {section} in {certpath}!")
+		#		sys.exit(1)
+		#	threshold = DHMS_to_timedelta(conf[section]['threshold'])
+		#	threshold_exceeded = False
+		#	namespace = {}
+		#	namespace['path'] = certpath
+		#	for cert in certsonly:
+		#		if not args.quiet:
+		#			print(f"Checking certificate {cert.subject.rfc4514_string()}")
+		#		try:
+		#			verify_cert_freshness(cert, nao)
+		#			end = cert.not_valid_after.replace(tzinfo=pytz.reference.UTC)
+		#			if end - nao < threshold:
+		#				threshold_exceeded = True
+		#		except PrematureBirthError:
+		#			threshold_exceeded = True
+		#		except ExpiredError:
+		#			threshold_exceeded = True
+
+		#		if threshold_exceeded:
+		#			namespace['subject'] = cert.subject.rfc4514_string()
+		#			break
+
+		#	if threshold_exceeded:
+		#		if not args.quiet:
+		#			print("Threshold exceeded!")
+		#		procargs = [ x.format(**namespace) for x in shlex.split(conf[section]['run']) ]
+		#		if not args.quiet:
+		#			print(f"Running {procargs}")
+		#		subprocess.run(procargs, stdin=subprocess.DEVNULL)
 # }}}
 class cli_catcert:# {{{
 	"""
