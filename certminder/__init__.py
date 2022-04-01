@@ -13,6 +13,28 @@ Binary Dependencies:
 
 """
 
+# On Certificate Verificaton
+#
+# In the eyes of OpenSSL, a certificate is considered verified if:
+# * the time is between the certificate's "not before" and "not after" dates
+# * validation of the certificate signature using the issuing certificate's
+#     public key succeeds
+# * the issuing certificate is verified
+#
+#
+#
+# Certificate retrieval precedence
+#
+# When trying to find an issuing certificate, there are two places that
+#   OpenSSL will look: the "system trust store" and the "additional untrusted
+#   certificates". The system trust store is For all intents and purposes relevant to us, 
+# When looking up an issuing certificate, OpenSSL's preference seems to be
+#   to check the system trust store first, falling back to the 
+# the chain is followed until one of the following occurs:
+# * the certificate issuer is the same as the current certificate
+#     (in other words, the top certificate is self-signed)
+# * I stopped writing here. Oops.
+
 import argparse, collections, datetime, locale, os, pytz.reference, sys
 import cryptography.x509
 import cryptography.hazmat.backends
@@ -20,8 +42,9 @@ import cryptography.hazmat.primitives.serialization
 import cryptography.hazmat.primitives.serialization.pkcs7
 import cryptography.hazmat.primitives.serialization.pkcs12
 
-__version__ = "0.6"
+__version__ = "0.7"
 
+# Whitespace definitions{{{
 whitespace_unicode = [
 	"0020", # SPACE
 	"00a0", # NO-BREAK SPACE
@@ -53,7 +76,11 @@ whitespace_unicode = [
 	"007f", # DELETE
 ]
 whitespace = ''.join([ chr(int(x, 16)) for x in whitespace_unicode ])
+# }}}
 
+# Helper functions; most of which come from
+# <https://github.com/jaysonlarose/jlib>, but transplanted here to cut down on
+# unnecessary dependencies.
 def splitlen_array_remainder(data, length):# {{{
 	
 	import math
@@ -183,6 +210,8 @@ def colorize(hexcolor, text, force=False):# {{{
 # }}}
 
 
+
+# PEM parsers
 class PasswordRequiredError(TypeError):# {{{
 	pass
 # }}}
@@ -552,7 +581,7 @@ def import_cacert_dir(path, recursive=False, max_filesize=1024*1024*1024):# {{{
 # cert.fingerprint(cryptography.hazmat.primitives.hashes.SHA512())
 # cert.fingerprint(cryptography.hazmat.primitives.hashes.MD5())
 
-
+# Data export functions
 def certificate_to_pem(cryptography_x509_certificate):# {{{
 	import cryptography.hazmat.primitives.serialization
 	pem_bytes = cryptography_x509_certificate.public_bytes(encoding=cryptography.hazmat.primitives.serialization.Encoding.PEM)
@@ -631,7 +660,8 @@ def get_certificates_from_derhex(bytedata):# {{{
 	return ret
 # }}}
 
-def get_cryptothing(obj):
+# catcert rendering classes
+def get_cryptothing(obj):# {{{
 	if isinstance(obj, cryptography.x509.Certificate):
 		return CertificateCryptoThing(obj)
 	elif isinstance(obj, cryptography.hazmat.primitives.asymmetric.rsa.RSAPrivateKey):
@@ -642,14 +672,14 @@ def get_cryptothing(obj):
 		return RSAPublicCryptoThing(obj)
 	else:
 		return UnknownCryptoThing(obj)
-
-class CryptoThing:
+# }}}
+class CryptoThing:# {{{
 	def __init__(self, obj):
 		self.obj = obj
 	def indent(self, size=4):
 		return("\n".join([ (" " * size) + x for x in self.render().splitlines() ]) + "\n")
-
-class UnknownCryptoThing(CryptoThing):
+# }}}
+class UnknownCryptoThing(CryptoThing):# {{{
 	type = "Unknown"
 	color = "#888"
 	@property
@@ -657,8 +687,8 @@ class UnknownCryptoThing(CryptoThing):
 		return str(type(self.obj))
 	def render(self):
 		return "I don't know how to display this!"
-
-class CertificateCryptoThing(CryptoThing):
+# }}}
+class CertificateCryptoThing(CryptoThing):# {{{
 	type = "Certificate"
 	color = "#aaf"
 	@property
@@ -666,8 +696,8 @@ class CertificateCryptoThing(CryptoThing):
 		return self.obj.subject.rfc4514_string()
 	def render(self):
 		return render_certificate(self.obj)
-
-class RSAPrivateCryptoThing(CryptoThing):
+# }}}
+class RSAPrivateCryptoThing(CryptoThing):# {{{
 	type = "RSA Private Key"
 	color = "#ff0"
 	@property
@@ -680,8 +710,8 @@ class RSAPrivateCryptoThing(CryptoThing):
 		proc = subprocess.Popen(procargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
 		out, err = proc.communicate(pem_text)
 		return out.decode()
-
-class RSAPublicCryptoThing(CryptoThing):
+# }}}
+class RSAPublicCryptoThing(CryptoThing):# {{{
 	type = "RSA Public Key"
 	color = "#f0f"
 	@property
@@ -694,9 +724,8 @@ class RSAPublicCryptoThing(CryptoThing):
 		proc = subprocess.Popen(procargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
 		out, err = proc.communicate(pem_text)
 		return out.decode()
-
-
-class CSRCryptoThing(CryptoThing):
+# }}}
+class CSRCryptoThing(CryptoThing):# {{{
 	type = "Certificate Signing Request"
 	color = "#aa0"
 	@property
@@ -709,7 +738,7 @@ class CSRCryptoThing(CryptoThing):
 		proc = subprocess.Popen(procargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
 		out, err = proc.communicate(pem_text)
 		return out.decode()
-
+# }}}
 
 # Everything above here is library stuff.
 # This is where the primary logic resides.
@@ -1031,6 +1060,7 @@ class cli_catcert:# {{{
 		group.add_argument("-q", "--quiet", action="store_const", const="none", dest="dump_mode", help="Omit certificate dump")
 		group.add_argument("-x", "--extra", action="store_const", const="extra", dest="dump_mode", help="Dump non-certificate items as well")
 		parser.add_argument("--force-color", action="store_true", dest="force_color", default=False, help="Force color output even if STDOUT is not a TTY")
+		parser.add_argument("--absolute-expiry", action="store_true", dest="absolute_expiry", default=False, help="Print absolute certificate expiration dates instead of relative ones.")
 	@classmethod
 	def run(cls, args):
 		c = args.file_or_host
@@ -1079,18 +1109,28 @@ class cli_catcert:# {{{
 		for cert in certsonly:
 			valid = True
 			reasons = []
+			start = cert.not_valid_before.replace(tzinfo=pytz.reference.UTC)
+			end = cert.not_valid_after.replace(tzinfo=pytz.reference.UTC)
 			try:
 				verify_cert_freshness(cert, nao)
-				end = cert.not_valid_after.replace(tzinfo=pytz.reference.UTC)
-				expiry_text = colorize("#888", "Expires in {}".format(timedelta_to_DHMS(end - nao)), force=args.force_color)
+				if args.absolute_expiry:
+					expiry_text = colorize("#888", "Expires {}".format(end.strftime("%F %T %Z")), force=args.force_color)
+				else:
+					expiry_text = colorize("#888", "Expires in {}".format(timedelta_to_DHMS(end - nao)), force=args.force_color)
 			except PrematureBirthError:
 				valid = False
 				reasons.append("Not yet valid")
-				expiry_text = colorize("#f00", "Premature birth", force=args.force_color)
+				if args.absolute_expiry:
+					expiry_text = colorize("#f00", "Not valid until {}".format(start.strftime("%F %T %Z")), force=args.force_color)
+				else:
+					expiry_text = colorize("#f00", "Premature birth", force=args.force_color)
 			except ExpiredError:
 				valid = False
 				reasons.append("Certificate expired")
-				expiry_text = colorize("#f00", "Expired!", force=args.force_color)
+				if args.absolute_expiry:
+					expiry_text = colorize("#f00", "Expired at {}".format(end.strftime("%F %T %Z")), force=args.force_color)
+				else:
+					expiry_text = colorize("#f00", "Expired!", force=args.force_color)
 			print("  * {} ({})".format(cert.subject.rfc4514_string(), expiry_text))
 			if args.verify:
 				vcert = cert
