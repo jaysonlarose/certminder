@@ -15,6 +15,7 @@ setuptools.setup(
 	install_requires = [
 		'cryptography',
 		'pyOpenSSL',
+		'pytz',
 	],
 	entry_points = {
 		'console_scripts': [
