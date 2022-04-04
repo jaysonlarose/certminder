@@ -2,7 +2,7 @@
 
 import setuptools
 
-version = __import__("certminder").__version__
+version = __import__("certminder._version").__version__
 setuptools.setup(
 	name         = "certminder",
 	version      = version,
