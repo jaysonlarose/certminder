@@ -7,6 +7,7 @@ by Jayson Larose
 Library Dependencies:
 * ssl (to run get_system_ca_certs())
 * cryptography
+* pytz
 
 Binary Dependencies:
 * openssl
@@ -35,12 +36,7 @@ Binary Dependencies:
 #     (in other words, the top certificate is self-signed)
 # * I stopped writing here. Oops.
 
-import argparse, collections, datetime, locale, os, pytz.reference, sys
-import cryptography.x509
-import cryptography.hazmat.backends
-import cryptography.hazmat.primitives.serialization
-import cryptography.hazmat.primitives.serialization.pkcs7
-import cryptography.hazmat.primitives.serialization.pkcs12
+import argparse, collections, datetime, locale, os, sys
 
 __version__ = "0.8"
 
@@ -208,8 +204,10 @@ def colorize(hexcolor, text, force=False):# {{{
 	else:
 		return text
 # }}}
-
-
+def now_tzaware():# {{{
+	import pytz.reference
+	return datetime.datetime.utcnow().replace(tzinfo=pytz.reference.UTC)
+# }}}
 
 # PEM parsers
 class PasswordRequiredError(TypeError):# {{{
@@ -295,6 +293,11 @@ def parse_pemblock(bytedata, password=None, extradata=False):# {{{
 	* CERIFICATE
 	* PRIVATE KEY
 	"""
+	import cryptography.x509
+	import cryptography.hazmat.backends
+	import cryptography.hazmat.primitives.serialization
+	import cryptography.hazmat.primitives.serialization.pkcs7
+	import cryptography.hazmat.primitives.serialization.pkcs12
 	blocktype = parse_pemheader(bytedata.splitlines()[0])[1]
 	parsed = None
 	if blocktype == 'CERTIFICATE':
@@ -401,6 +404,11 @@ def get_certificates_from_pkcs12(pkcs12_data, password=None):# {{{
 
 	[ x for x in mess if isinstance(x, cryptography.x509.Certificate) ]
 	"""
+	import cryptography.x509
+	import cryptography.hazmat.backends
+	import cryptography.hazmat.primitives.serialization
+	import cryptography.hazmat.primitives.serialization.pkcs7
+	import cryptography.hazmat.primitives.serialization.pkcs12
 	ret = []
 	pk = cryptography.hazmat.primitives.serialization.pkcs12.load_key_and_certificates(pkcs12_data, password=password)
 	if pk[1] is not None:
@@ -424,6 +432,11 @@ def get_certificates_from_pkcs7(pkcs7_data, extradata=False):# {{{
 	If parameter "extradata" is true, you'll get a tuple, the first element of which
 	indicating wheter PEM or DER data was parsed, the second being the cert list.
 	"""
+	import cryptography.x509
+	import cryptography.hazmat.backends
+	import cryptography.hazmat.primitives.serialization
+	import cryptography.hazmat.primitives.serialization.pkcs7
+	import cryptography.hazmat.primitives.serialization.pkcs12
 	try:
 		certs = cryptography.hazmat.primitives.serialization.pkcs7.load_pem_pkcs7_certificates(pkcs7_data)
 		encoding = cryptography.hazmat.primitives.serialization.Encoding.PEM
@@ -448,6 +461,11 @@ def try_everything(bytedata, password=None):# {{{
 	"""
 	Makes best effort go get stuff out of things.
 	"""
+	import cryptography.x509
+	import cryptography.hazmat.backends
+	import cryptography.hazmat.primitives.serialization
+	import cryptography.hazmat.primitives.serialization.pkcs7
+	import cryptography.hazmat.primitives.serialization.pkcs12
 	# Try loading a DER certificate
 	try:
 		cert = cryptography.x509.load_der_x509_certificate(bytedata)
@@ -493,12 +511,13 @@ class PrematureBirthError(TemporalError):# {{{
 class ExpiredError(TemporalError):# {{{
 	pass
 # }}}
-def verify_cert_freshness(cert, timestamp=datetime.datetime.utcnow().replace(tzinfo=pytz.reference.UTC)):# {{{
+def verify_cert_freshness(cert, timestamp=now_tzaware()):# {{{
 	"""
 	Verifies that the suppliced cryptography.x509 certificate is neither born too early nor too late.
 
 	Returns None if it's OK, raises PrematureBirthError or ExpiredError if it's not.
 	"""
+	import pytz.reference
 	start = cert.not_valid_before.replace(tzinfo=pytz.reference.UTC)
 	end   = cert.not_valid_after.replace(tzinfo=pytz.reference.UTC)
 	if timestamp < start:
@@ -514,6 +533,11 @@ def verify_cert_signature(cert, issuer_cert):# {{{
 
 	cert's signature is verified using issuer_cert's public key.
 	"""
+	import cryptography.x509
+	import cryptography.hazmat.backends
+	import cryptography.hazmat.primitives.serialization
+	import cryptography.hazmat.primitives.serialization.pkcs7
+	import cryptography.hazmat.primitives.serialization.pkcs12
 	try:
 		issuer_cert.public_key().verify(cert.signature, cert.tbs_certificate_bytes, cryptography.hazmat.primitives.asymmetric.padding.PKCS1v15(), cert.signature_hash_algorithm)
 		return True
@@ -526,6 +550,11 @@ def import_cacert_file(path):# {{{
 
 	Returns it as something you can update() into a dict, suitable for building a CA registry.
 	"""
+	import cryptography.x509
+	import cryptography.hazmat.backends
+	import cryptography.hazmat.primitives.serialization
+	import cryptography.hazmat.primitives.serialization.pkcs7
+	import cryptography.hazmat.primitives.serialization.pkcs12
 	ret = {}
 	certs = try_everything(open(path, "rb").read())
 	for cert in certs:
@@ -552,6 +581,11 @@ def import_cacert_dir(path, recursive=False, max_filesize=1024*1024*1024):# {{{
 	    This is needed because we lack a reliable way of identifying certain binary
 		file types (like PKCS#12) aside from trying to parse them.
 	"""
+	import cryptography.x509
+	import cryptography.hazmat.backends
+	import cryptography.hazmat.primitives.serialization
+	import cryptography.hazmat.primitives.serialization.pkcs7
+	import cryptography.hazmat.primitives.serialization.pkcs12
 	if not recursive:
 		flist = [ x for x in [ os.path.join(path, x) for x in os.listdir(path) ] if os.path.isfile(x) ]
 	else:
@@ -636,6 +670,11 @@ def get_certificates_from_derhex(bytedata):# {{{
 
 	Returns a list of cryptography.x509.Certificate objects.
 	"""
+	import cryptography.x509
+	import cryptography.hazmat.backends
+	import cryptography.hazmat.primitives.serialization
+	import cryptography.hazmat.primitives.serialization.pkcs7
+	import cryptography.hazmat.primitives.serialization.pkcs12
 	ret = []
 	lines = bytedata.splitlines(keepends=True)
 	processing = None
@@ -662,6 +701,11 @@ def get_certificates_from_derhex(bytedata):# {{{
 
 # catcert rendering classes
 def get_cryptothing(obj):# {{{
+	import cryptography.x509
+	import cryptography.hazmat.backends
+	import cryptography.hazmat.primitives.serialization
+	import cryptography.hazmat.primitives.serialization.pkcs7
+	import cryptography.hazmat.primitives.serialization.pkcs12
 	if isinstance(obj, cryptography.x509.Certificate):
 		return CertificateCryptoThing(obj)
 	elif isinstance(obj, cryptography.hazmat.primitives.asymmetric.rsa.RSAPrivateKey):
@@ -705,6 +749,11 @@ class RSAPrivateCryptoThing(CryptoThing):# {{{
 		return f"{self.obj.key_size} bit"
 	def render(self):
 		import subprocess
+		import cryptography.x509
+		import cryptography.hazmat.backends
+		import cryptography.hazmat.primitives.serialization
+		import cryptography.hazmat.primitives.serialization.pkcs7
+		import cryptography.hazmat.primitives.serialization.pkcs12
 		pem_text = self.obj.private_bytes(encoding=cryptography.hazmat.primitives.serialization.Encoding.PEM, format=cryptography.hazmat.primitives.serialization.PrivateFormat.PKCS8, encryption_algorithm=cryptography.hazmat.primitives.serialization.NoEncryption())
 		procargs = ['openssl', 'rsa', '-in', '-', '-text', '-noout']
 		proc = subprocess.Popen(procargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
@@ -719,6 +768,11 @@ class RSAPublicCryptoThing(CryptoThing):# {{{
 		return f"{self.obj.key_size} bit"
 	def render(self):
 		import subprocess
+		import cryptography.x509
+		import cryptography.hazmat.backends
+		import cryptography.hazmat.primitives.serialization
+		import cryptography.hazmat.primitives.serialization.pkcs7
+		import cryptography.hazmat.primitives.serialization.pkcs12
 		pem_text = self.obj.public_bytes(encoding=cryptography.hazmat.primitives.serialization.Encoding.PEM, format=cryptography.hazmat.primitives.serialization.PublicFormat.SubjectPublicKeyInfo)
 		procargs = ['openssl', 'rsa', '-in', '-', '-text', '-noout', '-pubin']
 		proc = subprocess.Popen(procargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
@@ -733,6 +787,11 @@ class CSRCryptoThing(CryptoThing):# {{{
 		return self.obj.subject.rfc4514_string()
 	def render(self):
 		import subprocess
+		import cryptography.x509
+		import cryptography.hazmat.backends
+		import cryptography.hazmat.primitives.serialization
+		import cryptography.hazmat.primitives.serialization.pkcs7
+		import cryptography.hazmat.primitives.serialization.pkcs12
 		pem_text = self.obj.public_bytes(encoding=cryptography.hazmat.primitives.serialization.Encoding.PEM)
 		procargs = ['openssl', 'req', '-in', '-', '-text', '-noout']
 		proc = subprocess.Popen(procargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
@@ -818,6 +877,12 @@ class cli_certminder:# {{{
 	def run(cls, args):
 		config_fn = args.config_file
 		import yaml, shlex, subprocess
+		import cryptography.x509
+		import cryptography.hazmat.backends
+		import cryptography.hazmat.primitives.serialization
+		import cryptography.hazmat.primitives.serialization.pkcs7
+		import cryptography.hazmat.primitives.serialization.pkcs12
+		import pytz.reference
 		if not args.quiet:
 			print(f"Reading {config_fn}")
 
@@ -1063,6 +1128,12 @@ class cli_catcert:# {{{
 		parser.add_argument("--absolute-expiry", action="store_true", dest="absolute_expiry", default=False, help="Print absolute certificate expiration dates instead of relative ones.")
 	@classmethod
 	def run(cls, args):
+		import cryptography.x509
+		import cryptography.hazmat.backends
+		import cryptography.hazmat.primitives.serialization
+		import cryptography.hazmat.primitives.serialization.pkcs7
+		import cryptography.hazmat.primitives.serialization.pkcs12
+		import pytz.reference
 		c = args.file_or_host
 		frags = c.split(":", 1)
 		if len(frags) > 1:
