@@ -38,30 +38,69 @@ sudo pip3 install git+https://github.com/jaysonlarose/certminder
 
 # certminder config file format
 
-Configuration files are in ConfigParser format. Each section describes a certificate to inspect, its action threshold, and what command to run if it fails the freshness test.
+Configuration files are in YAML format. An example looks like this:
 
-Example:
-
-```
-[my local certificate]
-certificate = /etc/pki/mycert.pem
-threshold   = 2w
-run         = /usr/bin/notify-send "certificate {path} is expiring!"
-
-[my remote certificate]
-certificate = google.com:443
-threshold   = 90d
-run         = /usr/bin/notify-send "certificate {path} is expiring!"
+```yaml
+- include: /etc/certminder.d
+- certificate: /etc/ssl/certs/mycert.pem
+  compare:     myhostname.com:443
+  privkey:     /etc/ssl/private/mycert.key
+  threshold: 2w
+  fetchcmds:
+    - salt-call tls.renew
+  reloadcmds:
+    - systemctl restart nginx
+- certificate: /etc/ssl/certs/myothercert.pem
+  threshold: 2w
+  fetchcmds: salt-call tls.renew
+  reloadcmds: systemctl restart dovecot
 ```
 
 
 ## Directives:
 
-`certificate` — path to the certificate file to test. Use `hostname:port` to check a TLS certificate over the network.
-	
-`threshold` —  activity will be triggered if the certificate is set to expire anytime before this threshold. Specified in a format like: `12w 10d 4h 2m 1s` translating to "10 weeks, 10 days, 4 hours, 2 minutes, 1 second".
+```
+include: 
+	Specifies one (or more) directories to check for additional configuration files.
+	Todo: allow specifying a glob in addition to a directory name
+	Todo: add "recursive" modifier?
+	Note: `include` directives will only be honored for a directly-specified
+	  configuration file. `include` directives in included configurations will be ignored.
 
-`run` — this command will be run if activity is triggered. Standard python string formatting is used for replacement. Currently the only tokens used for replacement are:
+certificate:
+	Specifies the path to a certificate file to check.
+	If the certificate is expired, or is less than the `threshold` duration away from
+	  expiration, the commands in the `fetchcmds` modifier will be run. If they succeed,
+	  then the commands in the `reloadcmds` modifier will be run.
+	Modifiers:
 
-* `path` — the path or hostname:port to the certificate being tested
-* `subject` — the RFC4514 subject name for the certificate. This can be used to differentiate between certificates if a path or network location contains a certificate chain.
+	compare: the certificate found at this path (or this host:port combination) will
+	  be compared against this certificate. If there's a mismatch, commands in the
+	  `reloadcmds` modifier will be run.
+	privkey: the private key found at this path will be checked to see if it works for
+	  this certificate. If it doesn't, `fetchcmds` will be run, followed by `reloadcmds`
+	  NOT YET IMPLEMENTED.
+	threshold: if the certificate is set to expire any time before this threshold,
+	  `fetchcmds` will be run, followed by `reloadcmds`. Specified in a format like:
+	  `12w 10d 4h 2m 1s` translating to "12 weeks, 10 days, 4 hours, 2 minutes, 1 second".
+	fetchcmds: command (or list of commands) to run to refresh the certificate.
+	  If this command succeeds, the commands in the `reloadcmds` directive are usually
+	  run afterwards.
+	  If a list of commands is specified, they will be executed in order, as long as the
+	  last run command has an exit status of 0.  Any non-zero exit code will be considered
+	  failure, and further commands will not be run.
+	reloadcmds: command (or list of commands) to run to reload service(s) dependent on this
+	  certificate. Unlike `fetchcmds`, all commands in this list will be run, regardless of
+	  exit status of the command before it.
+
+About running commands:
+
+Standard python string formatting is used for replacement. Currently the only
+tokens used for replacement are:
+
+    path - the path to the certificate being tested
+	subject - the RFC4514 subject name for the certificate. This can be
+	    used to differentiate between certificates if a path or network
+		location contains a certificate chain.
+
+```
