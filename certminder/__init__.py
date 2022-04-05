@@ -871,7 +871,7 @@ class cli_certminder:# {{{
 			namespace['certpath'] = certpath
 			if not os.path.exists(certpath):
 				print(f"Certificate {certpath} does not exist!", file=sys.stderr)
-				if 'fetch_if_missing' in cert_directive and cert_directive['fetch_missing']:
+				if 'fetch_if_missing' in cert_directive and cert_directive['fetch_if_missing']:
 					perform_fetch = True
 				else:
 					continue
