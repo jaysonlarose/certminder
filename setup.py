@@ -2,7 +2,11 @@
 
 import setuptools
 
-version = __import__("certminder._version").__version__
+_locals = {}
+with open("certminder/_version.py", "r") as fp:
+	exec(fp.read(), None, _locals)
+version = _locals["__version__"]
+
 setuptools.setup(
 	name         = "certminder",
 	version      = version,
