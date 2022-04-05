@@ -935,10 +935,9 @@ class cli_certminder:# {{{
 				except FallOut:
 					print("  Fell out of compare!")
 					pass
+				if threshold_exceeded:
+					perform_fetch = True
 
-
-			if threshold_exceeded:
-				perform_fetch = True
 			if perform_fetch:
 				fetch_commands = []
 				if not args.quiet:
