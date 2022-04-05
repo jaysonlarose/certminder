@@ -74,6 +74,8 @@ certificate:
 	  then the commands in the `reloadcmds` modifier will be run.
 	Modifiers:
 
+	fetch_if_missing: adding this directive and setting it `true` will cause a missing
+	  certificate or key file to be treated as "fetch needed" instead of an error.
 	compare: the certificate found at this path (or this host:port combination) will
 	  be compared against this certificate. If there's a mismatch, commands in the
 	  `reloadcmds` modifier will be run.

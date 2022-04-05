@@ -779,6 +779,8 @@ class cli_certminder:# {{{
 		  then the commands in the `reloadcmds` modifier will be run.
 		Modifiers:
 
+		fetch_if_missing: adding this directive and setting it `true` will cause a missing
+		  certificate or key file to be treated as "fetch needed" instead of an error.
 		compare: the certificate found at this path (or this host:port combination) will
 		  be compared against this certificate. If there's a mismatch, commands in the
 		  `reloadcmds` modifier will be run.
@@ -869,12 +871,19 @@ class cli_certminder:# {{{
 			namespace['certpath'] = certpath
 			if not os.path.exists(certpath):
 				print(f"Certificate {certpath} does not exist!", file=sys.stderr)
-				continue
-			certs = try_everything(open(certpath, "rb").read())
-			certsonly = [ x for x in certs if isinstance(x, cryptography.x509.Certificate) ]
-			if len(certsonly) < 1:
-				print(f"No certificates found in {certpath}!", file=sys.stderr)
-				continue
+				if 'fetch_if_missing' in cert_directive and cert_directive['fetch_missing']:
+					perform_fetch = True
+				else:
+					continue
+			if not perform_fetch:
+				certs = try_everything(open(certpath, "rb").read())
+				certsonly = [ x for x in certs if isinstance(x, cryptography.x509.Certificate) ]
+				if len(certsonly) < 1:
+					print(f"No certificates found in {certpath}!", file=sys.stderr)
+					if 'fetch_if_missing' in cert_directive and cert_directive['fetch_if_missing']:
+						perform_fetch = True
+					else:
+						continue
 			if 'threshold' in cert_directive:
 				threshold = DHMS_to_timedelta(cert_directive['threshold'])
 			threshold_exceeded = False
@@ -898,7 +907,7 @@ class cli_certminder:# {{{
 			class FallOut(Exception):
 				pass
 
-			if 'compare' in cert_directive:
+			if not perform_fetch and 'compare' in cert_directive:
 				if not args.quiet:
 					print(f"  `compare` directive found")
 				try:
