@@ -42,7 +42,7 @@ import cryptography.hazmat.primitives.serialization
 import cryptography.hazmat.primitives.serialization.pkcs7
 import cryptography.hazmat.primitives.serialization.pkcs12
 
-from _version import __version__
+from ._version import __version__
 
 # Whitespace definitions{{{
 whitespace_unicode = [
