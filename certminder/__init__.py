@@ -884,25 +884,26 @@ class cli_certminder:# {{{
 						perform_fetch = True
 					else:
 						continue
-			if 'threshold' in cert_directive:
-				threshold = DHMS_to_timedelta(cert_directive['threshold'])
-			threshold_exceeded = False
-			for certno, cert in enumerate(certsonly):
-				if certno == 0:
-					namespace['subject'] = cert.subject.rfc4514_string()
-				if not args.quiet:
-					print(f"Checking {certpath} certificate {cert.subject.rfc4514_string()}")
-				try:
-					verify_cert_freshness(cert, nao)
-					end = cert.not_valid_after.replace(tzinfo=pytz.reference.UTC)
+			if not perform_fetch:
+				if 'threshold' in cert_directive:
+					threshold = DHMS_to_timedelta(cert_directive['threshold'])
+				threshold_exceeded = False
+				for certno, cert in enumerate(certsonly):
+					if certno == 0:
+						namespace['subject'] = cert.subject.rfc4514_string()
 					if not args.quiet:
-						print(f"  expires in {timedelta_to_DHMS(end - nao)}")
-					if end - nao < threshold:
+						print(f"Checking {certpath} certificate {cert.subject.rfc4514_string()}")
+					try:
+						verify_cert_freshness(cert, nao)
+						end = cert.not_valid_after.replace(tzinfo=pytz.reference.UTC)
+						if not args.quiet:
+							print(f"  expires in {timedelta_to_DHMS(end - nao)}")
+						if end - nao < threshold:
+							threshold_exceeded = True
+					except PrematureBirthError:
 						threshold_exceeded = True
-				except PrematureBirthError:
-					threshold_exceeded = True
-				except ExpiredError:
-					threshold_exceeded = True
+					except ExpiredError:
+						threshold_exceeded = True
 
 			class FallOut(Exception):
 				pass
