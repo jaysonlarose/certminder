@@ -20,6 +20,7 @@ setuptools.setup(
 		'cryptography',
 		'pyOpenSSL',
 		'pytz',
+		'yaml',
 	],
 	entry_points = {
 		'console_scripts': [
