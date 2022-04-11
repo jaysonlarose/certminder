@@ -389,7 +389,7 @@ def get_certificates_from_pem(bytedata, extradata=False, password=None):# {{{
 # }}}
 # PKCS#12
 # * can contain multiple certificates
-# * can dontain private keys
+# * can contain private keys
 def get_certificates_from_pkcs12(pkcs12_data, password=None):# {{{
 	"""
 	Given a bytes() blob representing a PKCS#12 file, returns a list containing:
@@ -786,7 +786,6 @@ class cli_certminder:# {{{
 		  `reloadcmds` modifier will be run.
 		privkey: the private key found at this path will be checked to see if it works for
 		  this certificate. If it doesn't, `fetchcmds` will be run, followed by `reloadcmds`
-		  NOT YET IMPLEMENTED.
 		threshold: if the certificate is set to expire any time before this threshold,
 		  `fetchcmds` will be run, followed by `reloadcmds`. Specified in a format like:
 		  `12w 10d 4h 2m 1s` translating to "12 weeks, 10 days, 4 hours, 2 minutes, 1 second".
@@ -887,7 +886,6 @@ class cli_certminder:# {{{
 			if not perform_fetch:
 				if 'threshold' in cert_directive:
 					threshold = DHMS_to_timedelta(cert_directive['threshold'])
-				threshold_exceeded = False
 				for certno, cert in enumerate(certsonly):
 					if certno == 0:
 						namespace['subject'] = cert.subject.rfc4514_string()
@@ -899,11 +897,11 @@ class cli_certminder:# {{{
 						if not args.quiet:
 							print(f"  expires in {timedelta_to_DHMS(end - nao)}")
 						if end - nao < threshold:
-							threshold_exceeded = True
+							perform_fetch = True
 					except PrematureBirthError:
-						threshold_exceeded = True
+						perform_fetch = True
 					except ExpiredError:
-						threshold_exceeded = True
+						perform_fetch = True
 
 			class FallOut(Exception):
 				pass
@@ -937,6 +935,32 @@ class cli_certminder:# {{{
 					pass
 				if threshold_exceeded:
 					perform_fetch = True
+
+			if not perform_fetch and 'privkey' in cert_directive:
+				if not args.quiet:
+					print(f"  `privkey` directive found")
+				keypath = cert_directive['privkey']
+				if not os.path.exists(keypath):
+					print(f"Private key {keypath} does not exist!", file=sys.stderr)
+					if 'fetch_if_missing' in cert_directive and cert_directive['fetch_if_missing']:
+						perform_fetch = True
+					else:
+						continue
+				if not perform_fetch:
+					things = try_everything(open(keypath, "rb").read())
+					keysonly = [ x for x in things if isinstance(x, cryptography.hazmat.primitives.asymmetric.rsa.RSAPrivateKey) ]
+					if len(keysonly) < 1:
+						print(f"No private keys found in {certpath}!", file=sys.stderr)
+						if 'fetch_if_missing' in cert_directive and cert_directive['fetch_if_missing']:
+							perform_fetch = True
+						else:
+							continue
+					key = keysonly[0]
+					if certsonly[0].public_key().public_numbers().n != key.public_key().public_numbers().n:
+						print(f"Private key in {keypath} does not belong to certificate {certpath}!", file=sys.stderr)
+						perform_fetch = True
+					else:
+						print(f"  Private key modulo in {keypath} matches public key.")
 
 			if perform_fetch:
 				fetch_commands = []

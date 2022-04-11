@@ -81,7 +81,6 @@ certificate:
 	  `reloadcmds` modifier will be run.
 	privkey: the private key found at this path will be checked to see if it works for
 	  this certificate. If it doesn't, `fetchcmds` will be run, followed by `reloadcmds`
-	  NOT YET IMPLEMENTED.
 	threshold: if the certificate is set to expire any time before this threshold,
 	  `fetchcmds` will be run, followed by `reloadcmds`. Specified in a format like:
 	  `12w 10d 4h 2m 1s` translating to "12 weeks, 10 days, 4 hours, 2 minutes, 1 second".
