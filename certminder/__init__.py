@@ -444,6 +444,14 @@ def get_certificates_from_pkcs7(pkcs7_data, extradata=False):# {{{
 # pubkey_obj.__class__.__module__.split('.')[-1]
 
 # cryptography.hazmat.primitives.serialization.load_ssh_public_key(open(bytes))
+
+
+# Turning public key modulo into the same thing openssl spits out:
+#bytelist = []
+#for bytepos in range(pk.key_size // 8):
+#	bytelist.append((pk.public_numbers().n >> (bytepos * 8)) & 0xff)
+#':'.join([ "{:02x}".format(x) for x in [0] + list(reversed(bytelist)) ])
+
 def try_everything(bytedata, password=None):# {{{
 	"""
 	Makes best effort go get stuff out of things.
@@ -509,8 +517,8 @@ def verify_cert_freshness(cert, timestamp=datetime.datetime.utcnow().replace(tzi
 def verify_cert_signature(cert, issuer_cert):# {{{
 	"""
 	Parameters:
-	cert - cryptography.x509 cert to try and verify
-	issuer_cert - cryptography.x509 cert of the issuer that allegedly signed the first cert
+	cert — cryptography.x509 cert to try and verify
+	issuer_cert — cryptography.x509 cert of the issuer that allegedly signed the first cert
 
 	cert's signature is verified using issuer_cert's public key.
 	"""
@@ -519,6 +527,18 @@ def verify_cert_signature(cert, issuer_cert):# {{{
 		return True
 	except Exception:
 		return False
+# }}}
+def verify_cert_private_key(cert, private_key):# {{{
+	"""
+	Verifies that the supplied certificate belongs to the supplied private key by comparing their modulos
+	
+	Parameters:
+	cert — cryptography.x509 cert to compare public key modulo of
+	private_key — cryptography.hazmat.primitives.asymmetric.rsa.RSAPrivateKey
+
+	returns True if modulos match.
+	"""
+	return cert.public_key().public.numbers().n == private_key.public_key().public_numbers().n
 # }}}
 def import_cacert_file(path):# {{{
 	"""
@@ -1261,7 +1281,7 @@ def do_standalone(cmdclass):# {{{
 	Helper function.  Allows the use of a "cli_" class as a
 	standalone command.
 	"""
-	locale.setlocale(locale.LC_ALL, locale.getdefaultlocale())
+	locale.setlocale(locale.LC_ALL, '')
 	parser = argparse.ArgumentParser()
 	parser_kwargs = {}
 	parser_kwargs['formatter_class'] = argparse.RawDescriptionHelpFormatter
@@ -1294,7 +1314,7 @@ def main():# {{{
 	elif scriptbase == 'certminder':
 		certminder_main()
 	else:
-		locale.setlocale(locale.LC_ALL, locale.getdefaultlocale())
+		locale.setlocale(locale.LC_ALL, '')
 		protoparser, subparser_elements = build_argparser()
 		args = protoparser.parse_args()
 		if not hasattr(args, "cmd"):
