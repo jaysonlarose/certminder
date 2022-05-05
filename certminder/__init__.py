@@ -38,6 +38,7 @@ Binary Dependencies:
 import argparse, collections, datetime, locale, os, pytz.reference, sys
 import cryptography.x509
 import cryptography.hazmat.backends
+import cryptography.hazmat.backends.openssl.x509
 import cryptography.hazmat.primitives.serialization
 import cryptography.hazmat.primitives.serialization.pkcs7
 import cryptography.hazmat.primitives.serialization.pkcs12
@@ -687,6 +688,8 @@ def get_cryptothing(obj):# {{{
 	elif isinstance(obj, cryptography.hazmat.primitives.asymmetric.rsa.RSAPrivateKey):
 		return RSAPrivateCryptoThing(obj)
 	elif isinstance(obj, cryptography.hazmat.backends.openssl.x509._CertificateSigningRequest):
+		                 cryptography.hazmat.backends.openssl.x509._CertificateSigningRequest
+		
 		return CSRCryptoThing(obj)
 	elif isinstance(obj, cryptography.hazmat.backends.openssl.rsa._RSAPublicKey):
 		return RSAPublicCryptoThing(obj)
