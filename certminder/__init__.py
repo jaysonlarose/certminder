@@ -688,8 +688,6 @@ def get_cryptothing(obj):# {{{
 	elif isinstance(obj, cryptography.hazmat.primitives.asymmetric.rsa.RSAPrivateKey):
 		return RSAPrivateCryptoThing(obj)
 	elif isinstance(obj, cryptography.hazmat.backends.openssl.x509._CertificateSigningRequest):
-		                 cryptography.hazmat.backends.openssl.x509._CertificateSigningRequest
-		
 		return CSRCryptoThing(obj)
 	elif isinstance(obj, cryptography.hazmat.backends.openssl.rsa._RSAPublicKey):
 		return RSAPublicCryptoThing(obj)
