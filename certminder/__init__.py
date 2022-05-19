@@ -954,8 +954,6 @@ class cli_certminder:# {{{
 				except FallOut:
 					print("  Fell out of compare!")
 					pass
-				if threshold_exceeded:
-					perform_fetch = True
 
 			if not perform_fetch and 'privkey' in cert_directive:
 				if not args.quiet:
