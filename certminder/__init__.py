@@ -45,6 +45,16 @@ import cryptography.hazmat.primitives.serialization.pkcs12
 
 from ._version import __version__
 
+if hasattr(cryptography.hazmat.backends.openssl.rsa, "_CertificateSigningRequest"):
+	CertificateSigningRequest = cryptography.hazmat.backends.openssl.x509._CertificateSigningRequest
+else:
+	CertificateSigningRequest = cryptography.x509.CertificateSigningRequest
+
+if hasattr(cryptography.hazmat.backends.openssl.rsa, "_RSAPublicKey"):
+	RSAPublicKey = cryptography.hazmat.backends.openssl.rsa._RSAPublicKey
+else:
+	RSAPublicKey = cryptography.hazmat.primitives.asymmetric.rsa.RSAPublicKey
+
 # Whitespace definitions{{{
 whitespace_unicode = [
 	"0020", # SPACE
@@ -621,7 +631,7 @@ def render_certificate(cert):# {{{
 	"""
 	import subprocess
 	cert_text = certificate_to_pem(cert)
-	procargs = ['openssl', 'x509', '-in', '-', '-text', '-noout']
+	procargs = ['openssl', 'x509', '-text', '-noout']
 	proc = subprocess.Popen(procargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
 	out, err = proc.communicate(cert_text)
 	return out.decode()
@@ -687,9 +697,9 @@ def get_cryptothing(obj):# {{{
 		return CertificateCryptoThing(obj)
 	elif isinstance(obj, cryptography.hazmat.primitives.asymmetric.rsa.RSAPrivateKey):
 		return RSAPrivateCryptoThing(obj)
-	elif isinstance(obj, cryptography.x509.base.CertificateSigningRequest):
+	elif isinstance(obj, CertificateSigningRequest):
 		return CSRCryptoThing(obj)
-	elif isinstance(obj, cryptography.hazmat.primitives.asymmetric.rsa.RSAPublicKey):
+	elif isinstance(obj, RSAPublicKey):
 		return RSAPublicCryptoThing(obj)
 	else:
 		return UnknownCryptoThing(obj)
@@ -727,7 +737,7 @@ class RSAPrivateCryptoThing(CryptoThing):# {{{
 	def render(self):
 		import subprocess
 		pem_text = self.obj.private_bytes(encoding=cryptography.hazmat.primitives.serialization.Encoding.PEM, format=cryptography.hazmat.primitives.serialization.PrivateFormat.PKCS8, encryption_algorithm=cryptography.hazmat.primitives.serialization.NoEncryption())
-		procargs = ['openssl', 'rsa', '-in', '-', '-text', '-noout']
+		procargs = ['openssl', 'rsa', '-text', '-noout']
 		proc = subprocess.Popen(procargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
 		out, err = proc.communicate(pem_text)
 		return out.decode()
@@ -741,7 +751,7 @@ class RSAPublicCryptoThing(CryptoThing):# {{{
 	def render(self):
 		import subprocess
 		pem_text = self.obj.public_bytes(encoding=cryptography.hazmat.primitives.serialization.Encoding.PEM, format=cryptography.hazmat.primitives.serialization.PublicFormat.SubjectPublicKeyInfo)
-		procargs = ['openssl', 'rsa', '-in', '-', '-text', '-noout', '-pubin']
+		procargs = ['openssl', 'rsa', '-text', '-noout', '-pubin']
 		proc = subprocess.Popen(procargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
 		out, err = proc.communicate(pem_text)
 		return out.decode()
@@ -755,7 +765,7 @@ class CSRCryptoThing(CryptoThing):# {{{
 	def render(self):
 		import subprocess
 		pem_text = self.obj.public_bytes(encoding=cryptography.hazmat.primitives.serialization.Encoding.PEM)
-		procargs = ['openssl', 'req', '-in', '-', '-text', '-noout']
+		procargs = ['openssl', 'req', '-text', '-noout']
 		proc = subprocess.Popen(procargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
 		out, err = proc.communicate(pem_text)
 		return out.decode()
