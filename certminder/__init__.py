@@ -38,22 +38,24 @@ Binary Dependencies:
 import argparse, collections, datetime, locale, os, pytz.reference, sys
 import cryptography.x509
 import cryptography.hazmat.backends
-import cryptography.hazmat.backends.openssl.x509
+#import cryptography.hazmat.backends.openssl.x509
 import cryptography.hazmat.primitives.serialization
 import cryptography.hazmat.primitives.serialization.pkcs7
 import cryptography.hazmat.primitives.serialization.pkcs12
 
 from ._version import __version__
 
-if hasattr(cryptography.hazmat.backends.openssl.rsa, "_CertificateSigningRequest"):
-	CertificateSigningRequest = cryptography.hazmat.backends.openssl.x509._CertificateSigningRequest
-else:
-	CertificateSigningRequest = cryptography.x509.CertificateSigningRequest
+#if hasattr(cryptography.hazmat.backends.openssl.rsa, "_CertificateSigningRequest"):
+#	CertificateSigningRequest = cryptography.hazmat.backends.openssl.x509._CertificateSigningRequest
+#else:
+#	CertificateSigningRequest = cryptography.x509.CertificateSigningRequest
+CertificateSigningRequest = cryptography.x509.CertificateSigningRequest
 
-if hasattr(cryptography.hazmat.backends.openssl.rsa, "_RSAPublicKey"):
-	RSAPublicKey = cryptography.hazmat.backends.openssl.rsa._RSAPublicKey
-else:
-	RSAPublicKey = cryptography.hazmat.primitives.asymmetric.rsa.RSAPublicKey
+#if hasattr(cryptography.hazmat.backends.openssl.rsa, "_RSAPublicKey"):
+#	RSAPublicKey = cryptography.hazmat.backends.openssl.rsa._RSAPublicKey
+#else:
+#	RSAPublicKey = cryptography.hazmat.primitives.asymmetric.rsa.RSAPublicKey
+RSAPublicKey = cryptography.hazmat.primitives.asymmetric.rsa.RSAPublicKey
 
 # Whitespace definitions{{{
 whitespace_unicode = [
@@ -917,22 +919,22 @@ class cli_certminder:# {{{
 			if not perform_fetch:
 				if 'threshold' in cert_directive:
 					threshold = DHMS_to_timedelta(cert_directive['threshold'])
-				for certno, cert in enumerate(certsonly):
-					if certno == 0:
-						namespace['subject'] = cert.subject.rfc4514_string()
-					if not args.quiet:
-						print(f"Checking {certpath} certificate {cert.subject.rfc4514_string()}")
-					try:
-						verify_cert_freshness(cert, nao)
-						end = cert.not_valid_after.replace(tzinfo=pytz.reference.UTC)
+					for certno, cert in enumerate(certsonly):
+						if certno == 0:
+							namespace['subject'] = cert.subject.rfc4514_string()
 						if not args.quiet:
-							print(f"  expires in {timedelta_to_DHMS(end - nao)}")
-						if end - nao < threshold:
+							print(f"Checking {certpath} certificate {cert.subject.rfc4514_string()}")
+						try:
+							verify_cert_freshness(cert, nao)
+							end = cert.not_valid_after.replace(tzinfo=pytz.reference.UTC)
+							if not args.quiet:
+								print(f"  expires in {timedelta_to_DHMS(end - nao)}")
+							if end - nao < threshold:
+								perform_fetch = True
+						except PrematureBirthError:
 							perform_fetch = True
-					except PrematureBirthError:
-						perform_fetch = True
-					except ExpiredError:
-						perform_fetch = True
+						except ExpiredError:
+							perform_fetch = True
 
 			class FallOut(Exception):
 				pass
@@ -1123,8 +1125,17 @@ class cli_catcert:# {{{
 		group.add_argument("-x", "--extra", action="store_const", const="extra", dest="dump_mode", help="Dump non-certificate items as well")
 		parser.add_argument("--force-color", action="store_true", dest="force_color", default=False, help="Force color output even if STDOUT is not a TTY")
 		parser.add_argument("--absolute-expiry", action="store_true", dest="absolute_expiry", default=False, help="Print absolute certificate expiration dates instead of relative ones.")
+		parser.add_argument("--password", action="store_true", dest="request_password", default=False, help="Request password on command line (required for parsing pkcs12)")
 	@classmethod
 	def run(cls, args):
+		try_everything_kwargs = {}
+		if args.request_password:
+			if sys.stdin.isatty():
+				import getpass
+				password = getpass.getpass("Private key password: ")
+				try_everything_kwargs['password'] = password.encode()
+
+
 		c = args.file_or_host
 		frags = c.split(":", 1)
 		if len(frags) > 1:
@@ -1132,20 +1143,21 @@ class cli_catcert:# {{{
 			port = int(frags[1])
 			certs = get_certificate_chain_from_tls(host, port, extradata=False)
 		elif c == '-':
-			certs = try_everything(sys.stdin.read().encode())
+			certs = try_everything(sys.stdin.read().encode(), **try_everything_kwargs)
 		else:
 			if not os.path.exists(c):
 				print(f"{c} does not exist!", file=sys.stderr)
 				sys.exit(1)
 			try:
-				certs = try_everything(open(c, "rb").read())
+				certs = try_everything(open(c, "rb").read(), **try_everything_kwargs)
 			except PasswordRequiredError:
 				failed = True
 				if sys.stdin.isatty():
 					import getpass
 					password = getpass.getpass("Private key password: ")
+					try_everything_kwargs['password'] = password.encode()
 					try:
-						certs = try_everything(open(c, "rb").read(), password=password.encode())
+						certs = try_everything(open(c, "rb").read(), **try_everything_kwargs)
 						failed = False
 					except ValueError:
 						print("Bad password!", file=sys.stderr)
