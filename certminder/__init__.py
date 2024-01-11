@@ -221,6 +221,33 @@ def colorize(hexcolor, text, force=False):# {{{
 	else:
 		return text
 # }}}
+def parse_host_port_servername(text):
+	"""
+	Receives a text string with the format:
+
+	hostname[:port[:servername]]
+
+	If no port information is found, NotAHostError is raised. Otherwise, what this function returns is
+	a three-element tuple, containing:
+
+	* hostname (type str)
+	* port number (type int)
+	* options (type dict)
+
+	If servername information is found, it will be put in the 'servername' key of the options dict. Otherwise the options dict will be empty.
+	"""
+
+	frags = text.split(":")
+	options = {}
+	if len(frags) > 3:
+		raise RuntimeError("parse_host_port_servername parsed too many values!")
+	elif len(frags) == 1:
+		raise NotAHostError
+	elif len(frags) == 3:
+		options['servername'] = frags[2]
+	port = int(frags[1])
+	host = frags[0]
+	return (host, port, options)
 
 
 
@@ -367,15 +394,24 @@ def get_system_ca_certs():# {{{
 		ret.update(import_cacert_dir(capath))
 	return ret
 # }}}
-def get_certificate_chain_from_tls(host, port, extradata=False):# {{{
+def get_certificate_chain_from_tls(host, port, extradata=False, servername=None):# {{{
 	"""
 	Given a hostname and a port, uses `openssl s_client` to attempt to retrieve the
 	entire certificate chain it presents via TLS.
 
 	Returns a list of cryptography X509 objects.
+
+	Parameters:
+
+	host: Hostname or IP address to connect to
+	port: TCP port number to connect to
+	extradata: True if you want extra data returned about the type of each X509 object returned.
+	servername: The hostname to inform the remote host that we're trying to reach. This sets the value of the `-servername` openssl s_client parameter if non None.
 	"""
 	import subprocess
 	procargs = ['openssl', 's_client', '-host', host, '-port', f"{port}", '-showcerts']
+	if servername is not None:
+		procargs.extend(['-servername', servername])
 
 	proc = subprocess.run(procargs, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -506,6 +542,9 @@ def try_everything(bytedata, password=None):# {{{
 	return certs
 # }}}
 class TemporalError(Exception):# {{{
+	pass
+# }}}
+class NotAHostError(Exception):# {{{
 	pass
 # }}}
 class PrematureBirthError(TemporalError):# {{{
@@ -729,6 +768,9 @@ class CertificateCryptoThing(CryptoThing):# {{{
 		return self.obj.subject.rfc4514_string()
 	def render(self):
 		return render_certificate(self.obj)
+	def render_pem(self):
+		pem_text = self.obj.public_bytes(encoding=cryptography.hazmat.primitives.serialization.Encoding.PEM)
+		return pem_text.decode()
 # }}}
 class RSAPrivateCryptoThing(CryptoThing):# {{{
 	type = "RSA Private Key"
@@ -743,6 +785,9 @@ class RSAPrivateCryptoThing(CryptoThing):# {{{
 		proc = subprocess.Popen(procargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
 		out, err = proc.communicate(pem_text)
 		return out.decode()
+	def render_pem(self):
+		pem_text = self.obj.private_bytes(encoding=cryptography.hazmat.primitives.serialization.Encoding.PEM, format=cryptography.hazmat.primitives.serialization.PrivateFormat.PKCS8, encryption_algorithm=cryptography.hazmat.primitives.serialization.NoEncryption())
+		return pem_text.decode()
 # }}}
 class RSAPublicCryptoThing(CryptoThing):# {{{
 	type = "RSA Public Key"
@@ -757,6 +802,9 @@ class RSAPublicCryptoThing(CryptoThing):# {{{
 		proc = subprocess.Popen(procargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
 		out, err = proc.communicate(pem_text)
 		return out.decode()
+	def render_pem(self):
+		pem_text = self.obj.public_bytes(encoding=cryptography.hazmat.primitives.serialization.Encoding.PEM, format=cryptography.hazmat.primitives.serialization.PublicFormat.SubjectPublicKeyInfo)
+		return pem_text.decode()
 # }}}
 class CSRCryptoThing(CryptoThing):# {{{
 	type = "Certificate Signing Request"
@@ -771,6 +819,9 @@ class CSRCryptoThing(CryptoThing):# {{{
 		proc = subprocess.Popen(procargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
 		out, err = proc.communicate(pem_text)
 		return out.decode()
+	def render_pem(self):
+		pem_text = self.obj.public_bytes(encoding=cryptography.hazmat.primitives.serialization.Encoding.PEM)
+		return pem_text.decode()
 # }}}
 
 # Everything above here is library stuff.
@@ -913,6 +964,7 @@ class cli_certminder:# {{{
 				if len(certsonly) < 1:
 					print(f"No certificates found in {certpath}!", file=sys.stderr)
 					if 'fetch_if_missing' in cert_directive and cert_directive['fetch_if_missing']:
+						print(f"  fetch_if_missing directive set, requesting fetch", file=sys.stderr)
 						perform_fetch = True
 					else:
 						continue
@@ -930,10 +982,13 @@ class cli_certminder:# {{{
 							if not args.quiet:
 								print(f"  expires in {timedelta_to_DHMS(end - nao)}")
 							if end - nao < threshold:
+								print(f"  expiration exceeds threshold, requesting fetch", file=sys.stderr)
 								perform_fetch = True
 						except PrematureBirthError:
+							print(f"  certificate created in the future, requesting fetch", file=sys.stderr)
 							perform_fetch = True
 						except ExpiredError:
+							print(f"  certificate expired, requesting fetch", file=sys.stderr)
 							perform_fetch = True
 
 			class FallOut(Exception):
@@ -943,20 +998,25 @@ class cli_certminder:# {{{
 				if not args.quiet:
 					print(f"  `compare` directive found")
 				try:
-					frags = cert_directive['compare'].split(':', 1)
-					if len(frags) != 2:
-						print(f"Invalid `compare` modifier for {certpath}: {cert_directive['compare']}!", file=sys.stderr)
-						raise FallOut
 					try:
-						portno = int(frags[1])
-					except ValueError:
-						print(f"Invalid port number for `compare` modifier for {certpath}: {portno}!", file=sys.stderr)
-						raise FallOut
-					try:
-						comparecerts = get_certificate_chain_from_tls(frags[0], portno, extradata=False)
-					except subprocess.CalledProcessError:
-						print(f"Couldn't get TLS certificates for {certpath} from {cert_directive['compare']}!", file=sys.stderr)
-						raise FallOut
+						compare_host, compare_port, getcert_kwargs = parse_host_port_servername(cert_directive['compare'])
+						getcert_kwargs['extradata'] = False
+						try:
+							comparecerts = get_certificate_chain_from_tls(compare_host, compare_port, **getcert_kwargs)
+						except subprocess.CalledProcessError:
+							print(f"Couldn't get TLS certificates for {certpath} from {cert_directive['compare']}!", file=sys.stderr)
+							raise FallOut
+					except NotAHostError:
+						if not os.path.exists(cert_directive['compare']):
+							print(f"Cert specified in `compare` modifier for {certpath} ({cert_directive['compare']}) does not exist!", file=sys.stderr)
+							raise FallOut
+						try:
+							comparecerts = try_everything(open(cert_directive['compare'], "rb").read())
+						except:
+							print(f"Exception occurred trying to read `compare` modifier certificates for {certpath} from {cert_directive['compare']}!", file=sys.stderr)
+							raise FallOut
+					if not args.quiet:
+						print(f"  Compare certificate: {comparecerts[0].subject.rfc4514_string()}")
 					if comparecerts[0] != certsonly[0]:
 						if not args.quiet:
 							print(f"  compare FAILED against {cert_directive['compare']}, setting perform_reload")
@@ -966,7 +1026,6 @@ class cli_certminder:# {{{
 				except FallOut:
 					print("  Fell out of compare!")
 					pass
-
 			if not perform_fetch and 'privkey' in cert_directive:
 				if not args.quiet:
 					print(f"  `privkey` directive found")
@@ -1123,6 +1182,7 @@ class cli_catcert:# {{{
 		group = parser.add_mutually_exclusive_group()
 		group.add_argument("-q", "--quiet", action="store_const", const="none", dest="dump_mode", help="Omit certificate dump")
 		group.add_argument("-x", "--extra", action="store_const", const="extra", dest="dump_mode", help="Dump non-certificate items as well")
+		group.add_argument("-p", "--pem", action="store_const", const="pem", dest="dump_mode", help="Dump items as PEM")
 		parser.add_argument("--force-color", action="store_true", dest="force_color", default=False, help="Force color output even if STDOUT is not a TTY")
 		parser.add_argument("--absolute-expiry", action="store_true", dest="absolute_expiry", default=False, help="Print absolute certificate expiration dates instead of relative ones.")
 		parser.add_argument("--password", action="store_true", dest="request_password", default=False, help="Request password on command line (required for parsing pkcs12)")
@@ -1137,38 +1197,46 @@ class cli_catcert:# {{{
 
 
 		c = args.file_or_host
-		frags = c.split(":", 1)
-		if len(frags) > 1:
-			host = frags[0]
-			port = int(frags[1])
-			certs = get_certificate_chain_from_tls(host, port, extradata=False)
-		elif c == '-':
-			certs = try_everything(sys.stdin.read().encode(), **try_everything_kwargs)
-		else:
-			if not os.path.exists(c):
-				print(f"{c} does not exist!", file=sys.stderr)
-				sys.exit(1)
-			try:
-				certs = try_everything(open(c, "rb").read(), **try_everything_kwargs)
-			except PasswordRequiredError:
-				failed = True
-				if sys.stdin.isatty():
-					import getpass
-					password = getpass.getpass("Private key password: ")
-					try_everything_kwargs['password'] = password.encode()
-					try:
-						certs = try_everything(open(c, "rb").read(), **try_everything_kwargs)
-						failed = False
-					except ValueError:
-						print("Bad password!", file=sys.stderr)
-						sys.exit(1)
-					except PasswordRequiredError:
-						pass
-				if failed:
-					print(f"Password required for private key!", file=sys.stderr)
+		try:
+			host, port, getcert_kwargs = parse_host_port_servername(c)
+			getcert_kwargs['extradata'] = False
+			certs = get_certificate_chain_from_tls(host, port, **getcert_kwargs)
+		except NotAHostError:
+			if c == '-':
+				certs = try_everything(sys.stdin.read().encode(), **try_everything_kwargs)
+			else:
+				if not os.path.exists(c):
+					print(f"{c} does not exist!", file=sys.stderr)
 					sys.exit(1)
+				try:
+					certs = try_everything(open(c, "rb").read(), **try_everything_kwargs)
+				except PasswordRequiredError:
+					failed = True
+					if sys.stdin.isatty():
+						import getpass
+						password = getpass.getpass("Private key password: ")
+						try_everything_kwargs['password'] = password.encode()
+						try:
+							certs = try_everything(open(c, "rb").read(), **try_everything_kwargs)
+							failed = False
+						except ValueError:
+							print("Bad password!", file=sys.stderr)
+							sys.exit(1)
+						except PasswordRequiredError:
+							pass
+					if failed:
+						print(f"Password required for private key!", file=sys.stderr)
+						sys.exit(1)
+
+
 		certsonly = [ x for x in certs if isinstance(x, cryptography.x509.Certificate) ]
 		otheritems = [ x for x in certs if not isinstance(x, cryptography.x509.Certificate) ]
+		if args.dump_mode == "pem":
+			for item in certsonly + otheritems:
+				thing = get_cryptothing(item)
+				if hasattr(thing, "render_pem"):
+					print(thing.render_pem().rstrip())
+			sys.exit(0)
 		print(f"Found {len(certsonly):n} cert(s):")
 		if args.verify:
 			ca_store = {}
