@@ -591,7 +591,7 @@ def verify_cert_private_key(cert, private_key):# {{{
 
 	returns True if modulos match.
 	"""
-	return cert.public_key().public.numbers().n == private_key.public_key().public_numbers().n
+	return cert.public_key().public_numbers().n == private_key.public_key().public_numbers().n
 # }}}
 def import_cacert_file(path):# {{{
 	"""
