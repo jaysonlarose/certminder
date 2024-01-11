@@ -42,6 +42,7 @@ import cryptography.hazmat.backends
 import cryptography.hazmat.primitives.serialization
 import cryptography.hazmat.primitives.serialization.pkcs7
 import cryptography.hazmat.primitives.serialization.pkcs12
+import cryptography.hazmat.primitives.asymmetric.ec
 
 from ._version import __version__
 
@@ -732,12 +733,17 @@ def get_certificates_from_derhex(bytedata):# {{{
 	return ret
 # }}}
 
+# Define private key objects.
+private_key_types = (cryptography.hazmat.primitives.asymmetric.rsa.RSAPrivateKey, cryptography.hazmat.primitives.asymmetric.ec.EllipticCurvePrivateKey)
+
 # catcert rendering classes
 def get_cryptothing(obj):# {{{
 	if isinstance(obj, cryptography.x509.Certificate):
 		return CertificateCryptoThing(obj)
 	elif isinstance(obj, cryptography.hazmat.primitives.asymmetric.rsa.RSAPrivateKey):
 		return RSAPrivateCryptoThing(obj)
+	elif isinstance(obj, cryptography.hazmat.primitives.asymmetric.ec.EllipticCurvePrivateKey):
+		return EllipticCurvePrivateCryptoThing(obj)
 	elif isinstance(obj, CertificateSigningRequest):
 		return CSRCryptoThing(obj)
 	elif isinstance(obj, RSAPublicKey):
@@ -750,6 +756,9 @@ class CryptoThing:# {{{
 		self.obj = obj
 	def indent(self, size=4):
 		return("\n".join([ (" " * size) + x for x in self.render().splitlines() ]) + "\n")
+	@property
+	def is_privkey(self):
+		return isinstance(self.obj, private_key_types)
 # }}}
 class UnknownCryptoThing(CryptoThing):# {{{
 	type = "Unknown"
@@ -782,6 +791,23 @@ class RSAPrivateCryptoThing(CryptoThing):# {{{
 		import subprocess
 		pem_text = self.obj.private_bytes(encoding=cryptography.hazmat.primitives.serialization.Encoding.PEM, format=cryptography.hazmat.primitives.serialization.PrivateFormat.PKCS8, encryption_algorithm=cryptography.hazmat.primitives.serialization.NoEncryption())
 		procargs = ['openssl', 'rsa', '-text', '-noout']
+		proc = subprocess.Popen(procargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
+		out, err = proc.communicate(pem_text)
+		return out.decode()
+	def render_pem(self):
+		pem_text = self.obj.private_bytes(encoding=cryptography.hazmat.primitives.serialization.Encoding.PEM, format=cryptography.hazmat.primitives.serialization.PrivateFormat.PKCS8, encryption_algorithm=cryptography.hazmat.primitives.serialization.NoEncryption())
+		return pem_text.decode()
+# }}}
+class EllipticCurvePrivateCryptoThing(CryptoThing):# {{{
+	type = "Elliptic Curve Private Key"
+	color = "#ff0"
+	@property
+	def description(self):
+		return f"{self.obj.key_size} bit"
+	def render(self):
+		import subprocess
+		pem_text = self.obj.private_bytes(encoding=cryptography.hazmat.primitives.serialization.Encoding.PEM, format=cryptography.hazmat.primitives.serialization.PrivateFormat.PKCS8, encryption_algorithm=cryptography.hazmat.primitives.serialization.NoEncryption())
+		procargs = ['openssl', 'ec', '-text', '-noout']
 		proc = subprocess.Popen(procargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
 		out, err = proc.communicate(pem_text)
 		return out.decode()
@@ -823,6 +849,7 @@ class CSRCryptoThing(CryptoThing):# {{{
 		pem_text = self.obj.public_bytes(encoding=cryptography.hazmat.primitives.serialization.Encoding.PEM)
 		return pem_text.decode()
 # }}}
+
 
 # Everything above here is library stuff.
 # This is where the primary logic resides.
@@ -1038,15 +1065,15 @@ class cli_certminder:# {{{
 						continue
 				if not perform_fetch:
 					things = try_everything(open(keypath, "rb").read())
-					keysonly = [ x for x in things if isinstance(x, cryptography.hazmat.primitives.asymmetric.rsa.RSAPrivateKey) ]
+					keysonly = [ x for x in things if isinstance(x, private_key_types) ]
 					if len(keysonly) < 1:
-						print(f"No private keys found in {certpath}!", file=sys.stderr)
+						print(f"No private keys found in {keypath}!", file=sys.stderr)
 						if 'fetch_if_missing' in cert_directive and cert_directive['fetch_if_missing']:
 							perform_fetch = True
 						else:
 							continue
 					key = keysonly[0]
-					if certsonly[0].public_key().public_numbers().n != key.public_key().public_numbers().n:
+					if not verify_cert_private_key(certsonly[0], key):
 						print(f"Private key in {keypath} does not belong to certificate {certpath}!", file=sys.stderr)
 						perform_fetch = True
 					else:
